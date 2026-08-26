@@ -56,9 +56,17 @@ Overleaf 是自動存的，這裡刻意不是。原本 HTML 模式的契約就�
 
 **錯誤行號是主檔的行號**：編著 `sections/intro.tex` 時，TeX 報的 `l.123` 是 `main.tex` 的行號，直接跳會跳到錯的地方。所以只有在編主檔時才給「跳到該行」。
 
+**`typeof` 對 TDZ 中的 let 會拋錯**。`typeof x` 只對「未宣告」的識別字安全；對還在暫時性死區的 `let` 一樣拋 ReferenceError。主題切換的 IIFE 在 script 頂端就執行，裡面寫了 `typeof term`，而 `let term` 在檔案後面——結果整個 script 從那裡中斷，後面每一個 `let` 都沒初始化。症狀非常誤導：函式都還在（hoisting），但碰任何變數都說 TDZ。跨區塊要碰後面宣告的變數就掛 `window.__xxx`，不要用 typeof 試探。
+
+**node-pty 的 spawn-helper 沒有執行權限**。npm 解壓 prebuilds 後是 `-rw-r--r--`，spawn 會失敗在 `posix_spawnp failed`，訊息完全看不出是權限問題。`package.json` 加了 postinstall 自動 `chmod +x`，也留了 `npm run fix-pty` 手動修。
+
+**選檔一定要走原生對話框**。瀏覽器的 `<input type="file">` 只給你檔案內容，不給絕對路徑，而這個工具的整個前提就是讀寫硬碟上的真實檔案。走 `osascript` 叫 Finder 反而體驗更好。
+
 ## 待辦
 
 - 反向同步（見上）
+- 編輯器沒有語法高亮，底層是純 textarea。這是對標 Overleaf 剩下最明顯的差距
 - `.bib` 改動不會觸發重編——目前只有存 `.tex` 才編譯
 - 檔案樹只能看和切換，不能新增、改名、刪除
-- 編譯出的 PDF 每次都重設 `iframe.src`，會閃一下。PDF.js 自繪的話順帶解決
+- 終端機只有一個分頁，關掉再開會重啟一個新的 shell（狀態不保留）
+- 選檔對話框是 `osascript`，只有 macOS 能用

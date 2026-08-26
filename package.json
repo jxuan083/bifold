@@ -6,7 +6,9 @@
     "bifold": "src/server.js"
   },
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "fix-pty": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
   },
   "keywords": [
     "latex",
@@ -21,6 +23,10 @@
     "node": ">=18"
   },
   "dependencies": {
-    "pdfjs-dist": "^6.2.108"
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "pdfjs-dist": "^6.2.108",
+    "ws": "^8.21.3"
   }
 }

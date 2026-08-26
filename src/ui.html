@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>bifold</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
 <style>
   :root{
     --fg:#1b2733; --dim:#5b6b7d; --bar:#f7f9fb; --panel:#fff; --line:#dfe5ec;
@@ -18,7 +19,8 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;font:13px/1.5 -apple-system,"PingFang TC",sans-serif;
             color:var(--fg);background:var(--panel)}
-  #bar{height:46px;display:flex;align-items:center;gap:10px;padding:0 14px;
+  body{display:flex;flex-direction:column}
+  #bar{flex:0 0 46px;display:flex;align-items:center;gap:10px;padding:0 14px;
        border-bottom:1px solid var(--line);background:var(--bar)}
   #bar .name{font-weight:700;color:var(--accent);margin:0 4px;white-space:nowrap}
   #path{width:300px;padding:5px 9px;border:1px solid var(--line);border-radius:6px;
@@ -32,7 +34,19 @@
   button:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
   #msg{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #msg.err{color:var(--err)}
-  #wrap{display:flex;height:calc(100% - 46px)}
+  #wrap{display:flex;flex:1;min-height:0}
+  /* 終端機：真的一個 shell，所以 tectonic、git、claude 原本就在用的東西全都直接能用 */
+  #termWrap{flex:0 0 var(--th,260px);display:none;flex-direction:column;
+            border-top:1px solid var(--line);background:#141414;min-height:0}
+  #termWrap.show{display:flex}
+  #termBar{flex:0 0 26px;display:flex;align-items:center;gap:10px;padding:0 10px;
+           background:var(--bar);border-bottom:1px solid var(--line);
+           font-size:11px;color:var(--dim);cursor:ns-resize;user-select:none}
+  #termBar b{color:var(--fg);font-weight:600}
+  #termBar .cwd{font-family:ui-monospace,Menlo,monospace;overflow:hidden;
+                text-overflow:ellipsis;white-space:nowrap}
+  #termBar button{margin-left:auto;padding:1px 7px;font-size:11px;cursor:pointer}
+  #term{flex:1;min-height:0;padding:4px 6px}
   /* 檔案樹：論文是多檔案的，要切檔卻得手動貼絕對路徑實在很煩 */
   #tree{width:212px;flex:0 0 212px;display:none;flex-direction:column;
         border-right:1px solid var(--line);background:var(--bar);overflow:auto}
@@ -111,13 +125,16 @@
 <div id="bar">
   <button id="menu" title="檔案樹">☰</button>
   <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
-  <button id="open">開啟</button>
+  <button id="open" title="開啟左邊輸入框裡的路徑">開啟</button>
+  <button id="pickFile" title="用 Finder 選一個檔案">檔案…</button>
+  <button id="pickDir" title="用 Finder 選專案資料夾，會自動開啟裡面的主檔">資料夾…</button>
   <span class="name" id="name">—</span>
   <button id="save" class="primary">儲存 ⌘S</button>
   <button id="pick" title="⌘E 切換，Esc 退出">選取模式</button>
   <button id="build">建置 PPTX</button>
   <button id="dl">下載檔案</button>
   <button id="sync" class="on" title="游標移到哪一行，PDF 就跳到那一頁">跟隨游標</button>
+  <button id="termBtn" title="終端機 ⌃`">終端機</button>
   <button id="theme">深色</button>
   <span id="msg">載入中…</span>
 </div>
@@ -174,6 +191,14 @@
   </div>
 </div>
 
+<div id="termWrap">
+  <div id="termBar">
+    <b>終端機</b><span class="cwd" id="termCwd"></span>
+    <button id="termClose">✕</button>
+  </div>
+  <div id="term"></div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -183,6 +208,10 @@ const $ = (id) => document.getElementById(id);
     document.documentElement.dataset.t = t;
     const b = document.getElementById("theme");
     if (b) b.textContent = t === "dark" ? "淺色" : "深色";
+    // 不能寫 typeof term——這個 IIFE 在 script 頂端就跑，那時 let term 還在 TDZ，
+    // 而 typeof 只對「未宣告」安全，對 TDZ 中的 let 一樣會拋 ReferenceError，
+    // 整個 script 會就此中斷，後面所有 let 都不會初始化。
+    if (window.__syncTermTheme) window.__syncTermTheme();
   };
   set(localStorage.getItem("theme") ||
       (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
@@ -346,6 +375,20 @@ if (localStorage.getItem("tree") !== "0") {
 }
 
 $("open").onclick = openPath;
+
+// 走後端叫 macOS 原生對話框。瀏覽器自己的 <input type="file"> 拿不到絕對路徑，
+// 而這個工具讀寫的是硬碟上的真實檔案，沒有絕對路徑就無從談起。
+async function pickPath(type) {
+  say("等待選擇…（對話框可能被其他視窗蓋住）");
+  try {
+    const j = await (await fetch("/pick?type=" + type)).json();
+    if (!j.ok) return say(j.error || "已取消");
+    $("path").value = j.path;
+    await openPath();
+  } catch (e) { say("選檔失敗：" + e.message, true); }
+}
+$("pickFile").onclick = () => pickPath("file");
+$("pickDir").onclick = () => pickPath("dir");
 $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
 async function save() {
   const r = await fetch("/file", { method: "POST", body: code.value });
@@ -821,6 +864,8 @@ $("dl").onclick = () => (location.href = "/pptx");
 
 // ── 快捷鍵 ──────────────────────────────────────
 addEventListener("keydown", (e) => {
+  // 跟 VS Code 一樣用 ⌃`。注意這要在 mod 判斷之前，因為 mod 也吃 ctrlKey。
+  if (e.ctrlKey && e.key === "`") { e.preventDefault(); toggleTerm(); return; }
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key === "z" && !e.shiftKey) { e.preventDefault(); restore(UNDO, REDO); return; }
   if (mod && (e.key === "Z" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); restore(REDO, UNDO); return; }
@@ -834,6 +879,95 @@ addEventListener("keydown", (e) => {
   }
 });
 addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+// ── 終端機 ──────────────────────────────────────
+// 開的是真的 shell，所以 tectonic、git、claude 這些原本就在用的東西全都直接能跑。
+let term = null, termSock = null, fitAddon = null;
+
+const loadScript = (src) => new Promise((ok, bad) => {
+  const s = document.createElement("script");
+  s.src = src; s.onload = ok; s.onerror = () => bad(new Error("載入失敗：" + src));
+  document.head.appendChild(s);
+});
+
+const termTheme = () => document.documentElement.dataset.t === "dark"
+  ? { background: "#141414", foreground: "#cccccc", cursor: "#cccccc" }
+  : { background: "#1f1f1f", foreground: "#dddddd", cursor: "#dddddd" };
+
+// 掛到 window 讓主題切換能呼叫。直接讓那邊碰 term 會踩到 TDZ。
+window.__syncTermTheme = () => { if (term) term.options.theme = termTheme(); };
+
+async function initTerm() {
+  if (term) return;
+  await loadScript("/vendor/xterm.js");
+  await loadScript("/vendor/addon-fit.js");
+
+  term = new Terminal({
+    fontSize: 12,
+    fontFamily: 'ui-monospace, Menlo, monospace',
+    cursorBlink: true,
+    theme: termTheme(),
+  });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open($("term"));
+  fitAddon.fit();
+
+  termSock = new WebSocket("ws://" + location.host + "/term");
+  termSock.onopen = () => sendResize();
+  termSock.onmessage = (e) => term.write(e.data);
+  termSock.onclose = () => term.write("\r\n\x1b[90m[終端機已結束，關掉再開可重啟]\x1b[0m\r\n");
+  term.onData((d) => { if (termSock.readyState === 1) termSock.send(d); });
+}
+
+// pty 要知道視窗多大，否則 vim、less 這類全螢幕程式會畫錯
+function sendResize() {
+  if (!fitAddon || !termSock || termSock.readyState !== 1) return;
+  fitAddon.fit();
+  termSock.send("\x00" + term.cols + "," + term.rows);
+}
+
+async function toggleTerm() {
+  const on = $("termWrap").classList.toggle("show");
+  $("termBtn").classList.toggle("on", on);
+  localStorage.setItem("term", on ? "1" : "0");
+  if (on) {
+    $("termCwd").textContent = ST ? ST.file.replace(/\/[^/]+$/, "") : "";
+    try { await initTerm(); } catch (e) { return say(e.message, true); }
+    setTimeout(() => { sendResize(); term.focus(); }, 60);
+  }
+  fit(); updPage();
+}
+$("termBtn").onclick = toggleTerm;
+$("termClose").onclick = (e) => { e.stopPropagation(); toggleTerm(); };
+
+// 拖 termBar 調高度
+(function () {
+  const bar = $("termBar");
+  let on = false, veil = null;
+  bar.addEventListener("mousedown", (e) => {
+    if (e.target.tagName === "BUTTON") return;
+    on = true;
+    veil = document.createElement("div");
+    veil.style.cssText = "position:fixed;inset:0;z-index:99999;cursor:ns-resize";
+    document.body.appendChild(veil);
+    e.preventDefault();
+  });
+  addEventListener("mousemove", (e) => {
+    if (!on) return;
+    const h = Math.max(80, Math.min(innerHeight - 160, innerHeight - e.clientY));
+    document.documentElement.style.setProperty("--th", h + "px");
+  });
+  addEventListener("mouseup", () => {
+    if (!on) return;
+    on = false;
+    if (veil) { veil.remove(); veil = null; }
+    sendResize(); fit(); updPage();
+  });
+})();
+
+addEventListener("resize", () => { if (term) sendResize(); });
+if (localStorage.getItem("term") === "1") toggleTerm();
 
 load();
 </script>

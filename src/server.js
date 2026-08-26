@@ -95,6 +95,14 @@ ${fs.readFileSync(path.join(__dirname, "probe.js"), "utf8")}
   return body.includes("</body>") ? body.replace("</body>", probe + "\n</body>") : body + probe;
 }
 
+const VENDOR = {
+  "pdf.min.mjs": "pdfjs-dist/build/pdf.min.mjs",
+  "pdf.worker.min.mjs": "pdfjs-dist/build/pdf.worker.min.mjs",
+  "xterm.js": "@xterm/xterm/lib/xterm.js",
+  "xterm.css": "@xterm/xterm/css/xterm.css",
+  "addon-fit.js": "@xterm/addon-fit/lib/addon-fit.js",
+};
+
 // 走訪專案目錄收集可編輯的檔案。深度限 3 層，夠涵蓋 sections/、figures/ 這種結構，
 // 又不會在誤開家目錄之類的地方掃到天荒地老。
 const SKIP = new Set([".bifold", ".git", "node_modules", ".build-pptx", "rendered"]);
@@ -129,17 +137,23 @@ const state = () => cur && ({
   isMain: cur.kind === "tex" ? cur.main === cur.file : null,
 });
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const p = decodeURIComponent(url.pathname);
 
   if (p === "/") return send(res, 200, MIME[".html"], fs.readFileSync(path.join(__dirname, "ui.html")));
 
-  // PDF.js 直接從 node_modules 供應。它是 ESM，瀏覽器能直接 import，不需要打包工具。
+  // 前端用得到的第三方檔案直接從 node_modules 供應，不需要打包工具。
+  // 白名單而不是任意路徑：/vendor/ 底下能拿到什麼，這裡說了算。
   if (p.startsWith("/vendor/")) {
-    const f = path.join(__dirname, "..", "node_modules", "pdfjs-dist", "build", path.basename(p));
-    if (!fs.existsSync(f)) return send(res, 404, "text/plain", "缺少 pdfjs-dist，請先 npm install");
-    res.writeHead(200, { "Content-Type": MIME[".mjs"], "Cache-Control": "max-age=86400" });
+    const rel = VENDOR[path.basename(p)];
+    if (!rel) return send(res, 404, "text/plain", "not found");
+    const f = path.join(__dirname, "..", "node_modules", rel);
+    if (!fs.existsSync(f)) return send(res, 404, "text/plain", "缺少依賴，請先 npm install");
+    res.writeHead(200, {
+      "Content-Type": MIME[path.extname(f).toLowerCase()] || MIME[".js"],
+      "Cache-Control": "max-age=86400",
+    });
     return fs.createReadStream(f).pipe(res);
   }
   if (p === "/state") return json(res, 200, state() || { kind: null });
@@ -153,6 +167,30 @@ http.createServer(async (req, res) => {
     } catch (e) {
       return json(res, 400, { ok: false, error: e.message });
     }
+  }
+
+  // 原生選檔對話框。瀏覽器的 <input type="file"> 拿不到絕對路徑（安全限制），
+  // 而這個工具就是靠絕對路徑讀寫真實檔案的，所以只能請 macOS 出面。
+  if (p === "/pick") {
+    const dir = url.searchParams.get("type") === "dir";
+    const script = dir
+      ? 'POSIX path of (choose folder with prompt "選擇專案資料夾")'
+      : 'POSIX path of (choose file with prompt "選擇要編輯的檔案" of type {"html","htm","tex"})';
+    return execFile("osascript", ["-e", script], { timeout: 300000 }, (err, stdout) => {
+      // 使用者按取消也會走到 err，那不是錯誤，安靜收工就好
+      if (err) return json(res, 200, { ok: false });
+      let picked = stdout.trim().replace(/\/$/, "");
+      if (dir) {
+        // 資料夾本身不能編輯，挑一個主檔進去。挑不到就讓前端說明白。
+        const cands = walk(picked, /\.(tex|html?)$/i);
+        const best = cands.find((f) => /^(main|paper|thesis|index)\.(tex|html?)$/i.test(f))
+          || cands.find((f) => f.endsWith(".tex") && latex.findMain(path.join(picked, f)) === path.join(picked, f))
+          || cands[0];
+        if (!best) return json(res, 200, { ok: false, error: "這個資料夾裡沒有 .tex 或 .html" });
+        picked = path.join(picked, best);
+      }
+      json(res, 200, { ok: true, path: picked });
+    });
   }
 
   if (!cur) return send(res, 404, "text/plain", "尚未開啟任何檔案");
@@ -241,7 +279,59 @@ http.createServer(async (req, res) => {
   }
 
   send(res, 404, "text/plain", "not found");
-}).listen(PORT, "127.0.0.1", () => {
+});
+
+// ── 終端機 ────────────────────────────────────────
+// 真的開一個 pty 跑使用者自己的 shell，不是模擬幾個指令——
+// 這樣 tectonic、git、claude 這些原本就在用的東西全都直接能用。
+//
+// 只綁 127.0.0.1。這條通道等同於本機 shell 存取，絕不能對外開。
+function attachTerminal(server) {
+  let pty, WebSocketServer;
+  try {
+    pty = require("node-pty");
+    ({ WebSocketServer } = require("ws"));
+  } catch (e) {
+    console.log("終端機停用（缺 node-pty 或 ws，執行 npm install 即可）");
+    return;
+  }
+
+  const wss = new WebSocketServer({ server, path: "/term" });
+  wss.on("connection", (sock) => {
+    let term;
+    try {
+      term = pty.spawn(process.env.SHELL || "/bin/zsh", [], {
+        name: "xterm-color", cols: 80, rows: 24,
+        cwd: cur ? cur.root : process.env.HOME,
+        env: process.env,
+      });
+    } catch (e) {
+      // node-pty 的 prebuilt spawn-helper 常常沒有執行權限，訊息會是 posix_spawnp failed
+      sock.send("\r\n\x1b[31m無法開啟終端機：" + e.message +
+        "\r\n若是 posix_spawnp failed，執行 npm run fix-pty\x1b[0m\r\n");
+      return sock.close();
+    }
+
+    term.onData((d) => { if (sock.readyState === 1) sock.send(d); });
+    term.onExit(() => { try { sock.close(); } catch (e) {} });
+
+    sock.on("message", (m) => {
+      const s = m.toString();
+      // \x00 開頭是改變視窗大小，其餘一律當成鍵盤輸入
+      if (s[0] === "\x00") {
+        const [c, r] = s.slice(1).split(",").map(Number);
+        if (c > 0 && r > 0) { try { term.resize(c, r); } catch (e) {} }
+      } else {
+        term.write(s);
+      }
+    });
+    sock.on("close", () => { try { term.kill(); } catch (e) {} });
+  });
+}
+
+attachTerminal(server);
+
+server.listen(PORT, "127.0.0.1", () => {
   console.log(`bifold  http://127.0.0.1:${PORT}`);
   if (cur) {
     console.log(`編輯中  ${cur.file}`);
