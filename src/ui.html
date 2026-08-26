@@ -23,6 +23,10 @@
   #bar{flex:0 0 46px;display:flex;align-items:center;gap:10px;padding:0 14px;
        border-bottom:1px solid var(--line);background:var(--bar)}
   #bar .name{font-weight:700;color:var(--accent);margin:0 4px;white-space:nowrap}
+  /* 模式徽章。兩種模式的用途不重疊——HTML 是視覺型簡報，LaTeX 是論文履歷這類
+     文件——所以不適用的功能直接不出現就好，但得讓人知道現在在哪個模式。 */
+  #mode{font-size:10.5px;letter-spacing:.05em;padding:2px 7px;border-radius:4px;
+        border:1px solid var(--line);color:var(--dim);white-space:nowrap;cursor:help}
   #path{width:300px;padding:5px 9px;border:1px solid var(--line);border-radius:6px;
         background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace}
   button{font:inherit;padding:5px 12px;border:1px solid var(--line);background:var(--btn);
@@ -127,6 +131,7 @@
   <button id="menu" title="檔案樹">☰</button>
   <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
   <button id="browse" title="選檔案或整個專案資料夾">開啟…</button>
+  <span id="mode"></span>
   <span class="name" id="name">—</span>
   <button id="save" class="primary">儲存 ⌘S</button>
   <button id="pick" title="⌘E 切換，Esc 退出">選取模式</button>
@@ -276,6 +281,19 @@ function applyMode() {
   // 這顆按鈕作用的對象是右邊那一欄，所以它放在右邊；.tex 時它就是 Recompile
   $("reload").textContent = tex ? "重新編譯" : "重新預覽";
   $("reload").classList.toggle("primary", tex);
+
+  $("mode").textContent = tex ? "論文" : "簡報";
+  $("mode").title = tex
+    ? "LaTeX 文件（論文、履歷）\n右邊是 Tectonic 編出的 PDF\n\n"
+      + "· 點 PDF 上任一行跳回原始碼，跨檔自動切換\n"
+      + "· ⌘E 從游標跳到 PDF 對應頁\n"
+      + "· 跟隨游標可切成自動跳頁\n"
+      + "· ⌘S 存檔並重新編譯"
+    : "HTML 簡報（視覺排版）\n右邊就是成品本身\n\n"
+      + "· ⌘E 開選取模式，點畫面跳到對應行\n"
+      + "· 拖元素邊界改 margin / padding，會吸附對齊\n"
+      + "· 拖屬性名稱調數值，即時反映\n"
+      + "· 可匯出 PPTX";
   if (tex) {
     $("props").classList.remove("show"); picking = false; $("pick").classList.remove("on");
     // 頁面剛載入時 ST 還是 null，空 iframe 觸發的 load 事件會讓 fit() 溜過守衛，
