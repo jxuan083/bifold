@@ -33,6 +33,20 @@
   #msg{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #msg.err{color:var(--err)}
   #wrap{display:flex;height:calc(100% - 46px)}
+  /* 檔案樹：論文是多檔案的，要切檔卻得手動貼絕對路徑實在很煩 */
+  #tree{width:212px;flex:0 0 212px;display:none;flex-direction:column;
+        border-right:1px solid var(--line);background:var(--bar);overflow:auto}
+  #tree.show{display:flex}
+  #tree .th{padding:9px 12px 7px;font-size:10.5px;color:var(--dim);
+            letter-spacing:.08em;border-bottom:1px solid var(--edge)}
+  #tree .d{padding:8px 12px 3px;font:10.5px ui-monospace,Menlo,monospace;color:var(--dim)}
+  #tree .f{padding:4px 12px;font:12px/1.5 ui-monospace,Menlo,monospace;cursor:pointer;
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #tree .f:hover{background:var(--btnhov)}
+  #tree .f.on{background:var(--accent);color:var(--onaccent)}
+  #tree .f.main::after{content:" ●";color:var(--dim);font-size:9px;vertical-align:middle}
+  #tree .f.on.main::after{color:var(--onaccent)}
+  #menu{padding:5px 10px;font-size:14px;line-height:1.1}
   #left{width:46%;display:flex;flex-direction:column;min-width:0;overflow:hidden;background:var(--panel)}
   #split{width:6px;flex:0 0 6px;cursor:col-resize;background:var(--line);position:relative}
   #split:hover,#split.drag{background:#E2730C}
@@ -88,6 +102,7 @@
 <body>
 
 <div id="bar">
+  <button id="menu" title="檔案樹">☰</button>
   <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
   <button id="open">開啟</button>
   <span class="name" id="name">—</span>
@@ -102,6 +117,10 @@
 </div>
 
 <div id="wrap">
+  <div id="tree">
+    <div class="th" id="tRoot">檔案</div>
+    <div id="tlist"></div>
+  </div>
   <div id="left">
     <div id="find">
       <input id="q" placeholder="搜尋原始碼…">
@@ -242,6 +261,7 @@ async function load() {
   $("dl").disabled = !ST.hasBuild;
   code.value = await (await fetch("/file")).text();
   drawGutter(); dirty = false;
+  loadTree(); // 切檔之後要重新高亮，而且換專案時整棵樹都不一樣
   const n = code.value.split("\n").length;
   if (isTex()) { say(n + " 行 · 首次編譯可能要等 Tectonic 抓 package…"); compile(); }
   else {
@@ -257,6 +277,54 @@ async function openPath() {
   if (!j.ok) return say(j.error, true);
   await load();
 }
+// ── 檔案樹 ──────────────────────────────────────
+// 主檔標一個點：編著 sections/intro.tex 時，實際編譯的是哪一份要一眼看得出來。
+async function loadTree() {
+  if (!$("tree").classList.contains("show") || !ST) return;
+  let t;
+  try { t = await (await fetch("/tree")).json(); } catch (e) { return; }
+
+  $("tRoot").textContent = t.root.split("/").pop() + "/";
+  $("tRoot").title = t.root;
+  const list = $("tlist");
+  list.innerHTML = "";
+
+  let lastDir = null;
+  for (const rel of t.files) {
+    const cut = rel.lastIndexOf("/");
+    const dir = cut < 0 ? "" : rel.slice(0, cut);
+    if (dir !== lastDir) {
+      lastDir = dir;
+      if (dir) {
+        const d = document.createElement("div");
+        d.className = "d";
+        d.textContent = dir + "/";
+        list.appendChild(d);
+      }
+    }
+    const abs = t.root + "/" + rel;
+    const el = document.createElement("div");
+    el.className = "f" + (abs === ST.file ? " on" : "") +
+                   (ST.main && rel.split("/").pop() === ST.main ? " main" : "");
+    el.textContent = cut < 0 ? rel : "  " + rel.slice(cut + 1);
+    el.title = rel;
+    el.onclick = () => { $("path").value = abs; openPath(); };
+    list.appendChild(el);
+  }
+}
+
+$("menu").onclick = () => {
+  const on = $("tree").classList.toggle("show");
+  $("menu").classList.toggle("on", on);
+  localStorage.setItem("tree", on ? "1" : "0");
+  loadTree();
+  setTimeout(() => { fit(); updPage(); }, 0);
+};
+if (localStorage.getItem("tree") !== "0") {
+  $("tree").classList.add("show");
+  $("menu").classList.add("on");
+}
+
 $("open").onclick = openPath;
 $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
 async function save() {

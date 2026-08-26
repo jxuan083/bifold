@@ -94,6 +94,22 @@ ${fs.readFileSync(path.join(__dirname, "probe.js"), "utf8")}
   return body.includes("</body>") ? body.replace("</body>", probe + "\n</body>") : body + probe;
 }
 
+// 走訪專案目錄收集可編輯的檔案。深度限 3 層，夠涵蓋 sections/、figures/ 這種結構，
+// 又不會在誤開家目錄之類的地方掃到天荒地老。
+const SKIP = new Set([".bifold", ".git", "node_modules", ".build-pptx", "rendered"]);
+function walk(root, exts, dir = root, depth = 0, out = []) {
+  if (depth > 3 || out.length > 500) return out;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return out; }
+  for (const e of entries) {
+    if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) walk(root, exts, full, depth + 1, out);
+    else if (exts.test(e.name)) out.push(path.relative(root, full).split(path.sep).join("/"));
+  }
+  return out.sort();
+}
+
 const send = (res, code, type, data) => {
   res.writeHead(code, { "Content-Type": type, "Cache-Control": "no-store" });
   res.end(data);
@@ -163,6 +179,12 @@ http.createServer(async (req, res) => {
       "Cache-Control": "no-store",
     });
     return fs.createReadStream(lastBuild.pdf).pipe(res);
+  }
+
+  // 專案檔案樹。論文是多檔案的，要切檔卻得手動貼絕對路徑，這件事很煩。
+  if (p === "/tree") {
+    const exts = cur.kind === "tex" ? /\.(tex|bib|sty|cls)$/i : /\.html?$/i;
+    return json(res, 200, { root: cur.root, files: walk(cur.root, exts) });
   }
 
   // 游標在第幾行 → PDF 該跳第幾頁

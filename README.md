@@ -18,7 +18,9 @@ node src/server.js 8790 /abs/path/to/deck.html
 node src/server.js 8790 /abs/path/to/paper/main.tex
 ```
 
-啟動後開 http://127.0.0.1:8790，也可以在網頁左上貼另一個檔案的絕對路徑切換。
+啟動後開 http://127.0.0.1:8790。左上角 ☰ 開關檔案樹，點檔案就切過去；也可以貼絕對路徑切到別的專案。
+
+檔案樹列出專案裡所有可編輯的檔案（`.tex` 專案含 `.bib` / `.sty` / `.cls`），主檔右邊標一個 ● ——編著 `sections/intro.tex` 時，實際編譯的是哪一份要一眼看得出來。
 
 `.tex` 需要先裝引擎：
 
