@@ -126,17 +126,14 @@
 <div id="bar">
   <button id="menu" title="檔案樹">☰</button>
   <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
-  <button id="open" title="開啟左邊輸入框裡的路徑">開啟</button>
-  <button id="pickFile" title="用 Finder 選一個檔案">檔案…</button>
-  <button id="pickDir" title="用 Finder 選專案資料夾，會自動開啟裡面的主檔">資料夾…</button>
+  <button id="browse" title="選檔案或整個專案資料夾">開啟…</button>
   <span class="name" id="name">—</span>
   <button id="save" class="primary">儲存 ⌘S</button>
   <button id="pick" title="⌘E 切換，Esc 退出">選取模式</button>
   <button id="build">建置 PPTX</button>
   <button id="dl">下載檔案</button>
-  <button id="sync" class="on" title="游標移到哪一行，PDF 就跳到那一頁">跟隨游標</button>
+  <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨游標</button>
   <button id="termBtn" title="終端機 ⌃`">終端機</button>
-  <button id="theme">深色</button>
   <span id="msg">載入中…</span>
 </div>
 
@@ -204,24 +201,18 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-// ── 深色模式（跟隨系統，可手動覆蓋並記住）─────────────
+// ── 深色模式：純跟隨系統，沒有手動開關 ──────────────
 (function () {
   const set = (t) => {
     document.documentElement.dataset.t = t;
-    const b = document.getElementById("theme");
-    if (b) b.textContent = t === "dark" ? "淺色" : "深色";
     // 不能寫 typeof term——這個 IIFE 在 script 頂端就跑，那時 let term 還在 TDZ，
     // 而 typeof 只對「未宣告」安全，對 TDZ 中的 let 一樣會拋 ReferenceError，
     // 整個 script 會就此中斷，後面所有 let 都不會初始化。
     if (window.__syncTermTheme) window.__syncTermTheme();
   };
-  set(localStorage.getItem("theme") ||
-      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
-  document.getElementById("theme").onclick = () => {
-    const t = document.documentElement.dataset.t === "dark" ? "light" : "dark";
-    localStorage.setItem("theme", t);
-    set(t);
-  };
+  const mq = matchMedia("(prefers-color-scheme: dark)");
+  set(mq.matches ? "dark" : "light");
+  mq.addEventListener("change", (e) => set(e.matches ? "dark" : "light"));
 })();
 const code = $("code"), gut = $("gut"), pv = $("pv"), msg = $("msg");
 let dirty = false, picking = false;
@@ -376,21 +367,18 @@ if (localStorage.getItem("tree") !== "0") {
   $("menu").classList.add("on");
 }
 
-$("open").onclick = openPath;
-
 // 走後端叫 macOS 原生對話框。瀏覽器自己的 <input type="file"> 拿不到絕對路徑，
 // 而這個工具讀寫的是硬碟上的真實檔案，沒有絕對路徑就無從談起。
-async function pickPath(type) {
-  say("等待選擇…（對話框可能被其他視窗蓋住）");
+// 檔案和資料夾同一個對話框收，選到資料夾會自動找出裡面的主檔。
+$("browse").onclick = async () => {
+  say("等待選擇…");
   try {
-    const j = await (await fetch("/pick?type=" + type)).json();
+    const j = await (await fetch("/pick")).json();
     if (!j.ok) return say(j.error || "已取消");
     $("path").value = j.path;
     await openPath();
   } catch (e) { say("選檔失敗：" + e.message, true); }
-}
-$("pickFile").onclick = () => pickPath("file");
-$("pickDir").onclick = () => pickPath("dir");
+};
 $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
 async function save() {
   const r = await fetch("/file", { method: "POST", body: code.value });
@@ -424,21 +412,26 @@ async function getPdfjs() {
 
 const PDF_SCALE = 1.6;   // 渲染倍率。夠銳利又不會讓大論文吃掉太多記憶體
 let pages = [];          // 每頁的外框 div，捲動定位用
-let rendering = false;
+let renderSeq = 0;       // 用序號而不是布林旗標：旗標卡住就再也畫不出來
 
+// 每一頁都先畫在還沒掛上 DOM 的 canvas 上，整份畫完才一次換掉。
+// 邊畫邊掛會出事：只要渲染中容器被清空，那個 canvas 的 render promise
+// 就永遠不 resolve，await 鏈整條卡死，連帶把整個分頁凍住。
 async function renderPdf() {
-  if (rendering) return;
-  rendering = true;
+  const seq = ++renderSeq;
   const box = $("pdfBox");
   try {
     const lib = await getPdfjs();
     // 每次都換 URL，否則改完重編會拿到瀏覽器快取的舊 PDF
     const doc = await lib.getDocument({ url: "/pdf?t=" + Date.now() }).promise;
-    const keep = $("stage").scrollTop;   // 重編後留在原處，不要每次都彈回第一頁
+    if (seq !== renderSeq) return;   // 期間又編譯了一次，這份已經過時
 
-    box.innerHTML = "";
-    pages = [];
+    const keep = $("stage").scrollTop;   // 重編後留在原處，不要每次都彈回第一頁
+    const frag = document.createDocumentFragment();
+    const next = [];
+
     for (let n = 1; n <= doc.numPages; n++) {
+      if (seq !== renderSeq) return;
       const page = await doc.getPage(n);
       const vp = page.getViewport({ scale: PDF_SCALE });
       const wrap = document.createElement("div");
@@ -448,18 +441,24 @@ async function renderPdf() {
       const cv = document.createElement("canvas");
       cv.width = vp.width; cv.height = vp.height;
       cv.dataset.page = n;
-      wrap.appendChild(cv);
-      box.appendChild(wrap);
-      pages.push(wrap);
       await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+      wrap.appendChild(cv);
+      frag.appendChild(wrap);
+      next.push(wrap);
     }
+
+    if (seq !== renderSeq) return;
+    box.innerHTML = "";
+    box.appendChild(frag);
+    pages = next;
     $("stage").scrollTop = Math.min(keep, $("stage").scrollHeight);
     updPage();
   } catch (e) {
+    if (seq !== renderSeq) return;
     box.innerHTML = "";
+    pages = [];
     say("PDF 顯示失敗：" + e.message, true);
   }
-  rendering = false;
 }
 
 function scrollToPage(n) {
@@ -483,7 +482,7 @@ $("pdfBox").addEventListener("click", async (e) => {
   } catch (err) { return; }
   if (!j.file) return say("那個位置沒有對得上的原始碼");
 
-  mark(cv, e.clientX - r.left, e.clientY - r.top);
+  if (j.box) markBox(cv, j.box);
   if (j.file !== ST.file) {
     if (dirty && !confirm("有未儲存的修改，確定要切到 " + j.file.split("/").pop() + "？")) return;
     $("path").value = j.file;
@@ -493,11 +492,15 @@ $("pdfBox").addEventListener("click", async (e) => {
   say(j.file.split("/").pop() + " 第 " + j.line + " 行" + (j.exact ? "" : "（最接近的一行）"));
 });
 
-// 點過的地方閃一下再淡出，確認自己點到的是哪裡
-function mark(cv, x, y) {
+// 框出 SyncTeX 實際命中的範圍，而不是滑鼠點的位置。
+// 反查不可能永遠精準（SyncTeX 的粒度是段落），讓它可見比假裝準確好——
+// 框住整段就代表這一段只能對到同一行，那不是點歪了。
+function markBox(cv, b) {
   const el = document.createElement("div");
   el.className = "mark";
-  el.style.cssText += `left:${x - 22}px;top:${y - 9}px;width:44px;height:18px`;
+  const s = PDF_SCALE;
+  el.style.cssText += `left:${b.x * s}px;top:${(b.y - b.h) * s}px;` +
+                      `width:${Math.max(b.w * s, 8)}px;height:${Math.max((b.h + b.d) * s, 6)}px`;
   cv.parentElement.appendChild(el);
   requestAnimationFrame(() => el.classList.add("fade"));
   setTimeout(() => el.remove(), 1300);
@@ -550,21 +553,33 @@ $("eFull").onclick = () => {
 // ── 跟隨游標：游標在第幾行，PDF 就跳第幾頁 ──────────
 // 反過來（點 PDF 跳原始碼）做不到：PDF 交給瀏覽器內建 viewer 顯示，
 // 拿不到點擊座標。那要改用 PDF.js 自繪才行，見 NOTES.md。
-let syncOn = true, syncTimer = 0;
+// 預設關閉。開著的時候每打一個字、每點一下都會讓右邊跳頁，
+// 讀到一半被扯走非常煩——想對位置的時候按 ⌘E 跳一次就好。
+let syncOn = localStorage.getItem("sync") === "1", syncTimer = 0;
+$("sync").classList.toggle("on", syncOn);
 $("sync").onclick = () => {
   syncOn = !syncOn;
   $("sync").classList.toggle("on", syncOn);
-  say(syncOn ? "跟隨游標：開" : "跟隨游標：關");
+  localStorage.setItem("sync", syncOn ? "1" : "0");
+  say(syncOn ? "跟隨游標：開（每次移動游標都會跳頁）" : "跟隨游標：關（按 ⌘E 跳一次）");
 };
 
-async function syncToCursor() {
-  if (!syncOn || !isTex() || !pages.length) return;
+// force = 使用者主動按了 ⌘E，這時候不管開關與選取狀態都要跳
+async function syncToCursor(force) {
+  if (!isTex() || !pages.length) return;
+  if (!force) {
+    if (!syncOn) return;
+    // 正在拉選一段文字時不要跳。選取本身就是在讀，跳頁只會打斷。
+    if (code.selectionStart !== code.selectionEnd) return;
+  }
   const line = code.value.slice(0, code.selectionStart).split("\n").length;
   try {
     const j = await (await fetch("/page?line=" + line)).json();
-    if (j.page && j.page !== curPage) {
+    if (!j.page) return force && say("這一行在 PDF 上找不到對應位置");
+    if (j.page !== curPage || force) {
       curPage = j.page;
       scrollToPage(j.page);
+      if (force) say("第 " + line + " 行 → PDF 第 " + j.page + " 頁");
     }
   } catch (e) { /* 查不到就維持現狀，不要打斷編輯 */ }
 }
@@ -873,8 +888,13 @@ addEventListener("keydown", (e) => {
   if (mod && (e.key === "Z" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); restore(REDO, UNDO); return; }
   if (mod && e.key === "s") { e.preventDefault(); save(); }
   if (mod && e.key === "f") { e.preventDefault(); $("find").classList.add("show"); $("q").focus(); $("q").select(); }
-  // 不用 DevTools 慣例的 ⌘⇧C，那個會被 Chrome 自己攔走，網頁收不到
-  if (mod && e.key === "e") { e.preventDefault(); if (!isTex()) $("pick").click(); }
+  // 兩種模式下語意一致：把左右兩邊對起來。
+  // HTML 是「點畫面找程式碼」的選取模式，.tex 是「從游標跳到 PDF 對應頁」。
+  // 不用 DevTools 慣例的 ⌘⇧C，那個會被 Chrome 自己攔走，網頁收不到。
+  if (mod && e.key === "e") {
+    e.preventDefault();
+    if (isTex()) syncToCursor(true); else $("pick").click();
+  }
   if (e.key === "Escape") {
     if ($("find").classList.contains("show")) $("find").classList.remove("show");
     else if (picking) $("pick").click();
@@ -925,16 +945,37 @@ async function initTerm() {
   connectTerm();
 }
 
+// 丟掉舊連線前先拔掉 handler。否則舊 socket 的 onclose 會在新連線建立之後
+// 才觸發，把「連線中斷」寫進一個其實剛連上的終端機。
+function dropSock() {
+  if (!termSock) return;
+  termSock.onopen = termSock.onmessage = termSock.onclose = termSock.onerror = null;
+  try { termSock.close(); } catch (e) {}
+  termSock = null;
+}
+
 // pty 結束（打了 exit）、server 重啟、電腦睡醒，socket 都會關。
 // 之前這裡沒有重連，關掉面板再開也沒用——initTerm 開頭就早退了。
 function connectTerm() {
   if (termSock && termSock.readyState <= 1) return;   // 連線中或已連上
-  term.write("\r\n\x1b[90m連線中…\x1b[0m\r\n");
-  termSock = new WebSocket("ws://" + location.host + "/term");
-  termSock.onopen = () => { term.write("\x1b[2J\x1b[H"); sendResize(); };
-  termSock.onmessage = (e) => term.write(e.data);
-  termSock.onclose = () => term.write("\r\n\x1b[90m[連線中斷。按任意鍵重新連線]\x1b[0m\r\n");
-  termSock.onerror = () => {};
+  dropSock();
+
+  // 一定要 reset 而不是只送 \e[2J\e[H。清畫面不會清掉模式——
+  // 舊 shell 開過的滑鼠追蹤與焦點回報還留著，xterm 會繼續把 ^[[<35;..M
+  // 這類事件當輸入送給新 shell，新 shell 不認得就原樣回顯成一堆亂碼。
+  term.reset();
+  term.write("\x1b[90m連線中…\x1b[0m\r\n");
+
+  const sock = new WebSocket("ws://" + location.host + "/term");
+  termSock = sock;
+  // 每個 handler 都確認自己還是「現役」那條連線，避免舊連線亂寫
+  sock.onopen = () => { if (termSock === sock) sendResize(); };
+  sock.onmessage = (e) => { if (termSock === sock) term.write(e.data); };
+  sock.onclose = () => {
+    if (termSock !== sock) return;
+    term.write("\r\n\x1b[90m[連線中斷。按任意鍵重新連線]\x1b[0m\r\n");
+  };
+  sock.onerror = () => {};
 }
 
 // pty 要知道視窗多大，否則 vim、less 這類全螢幕程式會畫錯
@@ -959,9 +1000,10 @@ $("termBtn").onclick = toggleTerm;
 $("termClose").onclick = (e) => { e.stopPropagation(); toggleTerm(); };
 $("termRestart").onclick = (e) => {
   e.stopPropagation();
-  if (termSock && termSock.readyState <= 1) termSock.close();  // onclose 之後才連得起來
-  setTimeout(connectTerm, 120);
-  term && term.focus();
+  if (!term) return;
+  dropSock();        // 拔掉 handler 再關，不必等 onclose，也就不必 setTimeout
+  connectTerm();
+  term.focus();
 };
 
 // 拖 termBar 調高度
