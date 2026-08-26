@@ -220,8 +220,15 @@ function applyMode() {
   for (const id of ["pick", "build", "dl"]) $(id).style.display = tex ? "none" : "";
   for (const id of ["pgPrev", "pgNow", "pgNext", "zoom", "hl"]) $(id).style.display = tex ? "none" : "";
   $("sync").style.display = tex ? "" : "none";
-  if (tex) { $("props").classList.remove("show"); picking = false; $("pick").classList.remove("on"); }
-  else $("err").classList.remove("show");
+  if (tex) {
+    $("props").classList.remove("show"); picking = false; $("pick").classList.remove("on");
+    // 頁面剛載入時 ST 還是 null，空 iframe 觸發的 load 事件會讓 fit() 溜過守衛，
+    // 在 frameBox 上留下 transform 與 height。那之後沒人會清，PDF 就被壓成一條。
+    // 與其追事件順序，不如在切模式時無條件清掉。
+    $("frameBox").style.transform = "";
+    $("frameBox").style.height = "";
+    pv.style.height = "";
+  } else $("err").classList.remove("show");
 }
 
 async function load() {
@@ -360,6 +367,9 @@ pv.addEventListener("load", () => {
 });
 
 function fit() {
+  // PDF 模式不套 1600px 頁框那套縮放：這裡會把量到的 iframe 高度寫成 inline style，
+  // 而 PDF iframe 的 offsetHeight 初始是 0，寫進去就把預覽壓成看不見。
+  if (isTex()) return;
   const z = $("zoom").value;
   S = z === "fit" ? Math.min(1, ($("stage").clientWidth - 20) / 1600) : +z;
   $("frameBox").style.transform = "scale(" + S + ")";

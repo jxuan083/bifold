@@ -155,7 +155,13 @@ http.createServer(async (req, res) => {
   if (p === "/pdf") {
     if (!lastBuild || !lastBuild.pdf || !fs.existsSync(lastBuild.pdf))
       return send(res, 404, "text/plain", "尚未編譯");
-    res.writeHead(200, { "Content-Type": MIME[".pdf"], "Cache-Control": "no-store" });
+    // 要給 Content-Length。少了它會走 chunked，瀏覽器內建的 PDF viewer
+    // 遇到 chunked 有時就整片空白，不報錯也不畫東西，很難查。
+    res.writeHead(200, {
+      "Content-Type": MIME[".pdf"],
+      "Content-Length": fs.statSync(lastBuild.pdf).size,
+      "Cache-Control": "no-store",
+    });
     return fs.createReadStream(lastBuild.pdf).pipe(res);
   }
 
