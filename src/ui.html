@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>bifold</title>
+<style>
+  :root{
+    --fg:#1b2733; --dim:#5b6b7d; --bar:#f7f9fb; --panel:#fff; --line:#dfe5ec;
+    --edge:#eef2f7; --gutfg:#9aa8b8; --btn:#fff; --btnhov:#eef2f7; --accent:#173A6B;
+    --onaccent:#fff; --sel:#cfe3ff; --stage:#eef1f5; --shadow:rgba(0,0,0,.12); --err:#c0392b;
+  }
+  /* VS Code Dark Modern 的實際色值。預覽區永遠白底，那是簡報本身，變色就看不到真實成品 */
+  :root[data-t="dark"]{
+    --fg:#cccccc; --dim:#9d9d9d; --bar:#181818; --panel:#1f1f1f; --line:#2b2b2b;
+    --edge:#2b2b2b; --gutfg:#6e7681; --btn:#313131; --btnhov:#3c3c3c; --accent:#0078d4;
+    --onaccent:#fff; --sel:#264f78; --stage:#141414; --shadow:rgba(0,0,0,.6); --err:#f14c4c;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font:13px/1.5 -apple-system,"PingFang TC",sans-serif;
+            color:var(--fg);background:var(--panel)}
+  #bar{height:46px;display:flex;align-items:center;gap:10px;padding:0 14px;
+       border-bottom:1px solid var(--line);background:var(--bar)}
+  #bar .name{font-weight:700;color:var(--accent);margin:0 4px;white-space:nowrap}
+  #path{width:300px;padding:5px 9px;border:1px solid var(--line);border-radius:6px;
+        background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace}
+  button{font:inherit;padding:5px 12px;border:1px solid var(--line);background:var(--btn);
+         color:var(--fg);border-radius:6px;cursor:pointer}
+  button:hover{background:var(--btnhov)}
+  button:disabled{opacity:.4;cursor:default}
+  button.on{background:var(--accent);border-color:var(--accent);color:var(--onaccent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:var(--onaccent)}
+  button:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
+  #msg{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #msg.err{color:var(--err)}
+  #wrap{display:flex;height:calc(100% - 46px)}
+  #left{width:46%;display:flex;flex-direction:column;min-width:0;overflow:hidden;background:var(--panel)}
+  #split{width:6px;flex:0 0 6px;cursor:col-resize;background:var(--line);position:relative}
+  #split:hover,#split.drag{background:#E2730C}
+  #split::after{content:"";position:absolute;inset:0 -4px}
+  #pvbar{height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;
+         border-bottom:1px solid var(--line);background:var(--bar);font-size:12px;color:var(--dim)}
+  #pvbar button{padding:3px 9px}
+  #pvbar .pg{font-variant-numeric:tabular-nums;min-width:56px;text-align:center;color:var(--accent);font-weight:700}
+  select{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:5px;
+         background:var(--btn);color:var(--fg)}
+  #find{display:none;gap:6px;padding:6px 8px;border-bottom:1px solid var(--edge);background:var(--bar)}
+  #find.show{display:flex}
+  #find input{flex:1;padding:4px 8px;border:1px solid var(--line);border-radius:5px;
+              background:var(--btn);color:var(--fg);font:inherit}
+  #ed{flex:1;display:flex;overflow:hidden}
+  #gut{width:52px;padding:10px 8px 10px 0;text-align:right;background:var(--bar);color:var(--gutfg);
+       border-right:1px solid var(--edge);overflow:hidden;user-select:none;
+       font:11.5px/1.55 ui-monospace,Menlo,monospace;white-space:pre}
+  #code{flex:1;padding:10px 12px;border:0;outline:0;resize:none;white-space:pre;overflow:auto;
+        background:var(--panel);color:var(--fg);
+        font:11.5px/1.55 ui-monospace,Menlo,monospace;tab-size:2}
+  #code::selection{background:var(--sel)}
+  #props{display:none;border-top:1px solid var(--line);background:var(--bar);padding:8px 10px;
+         max-height:190px;overflow:auto}
+  #props.show{display:block}
+  #props .hd{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim);margin-bottom:7px}
+  #props .hd b{color:var(--accent);font:700 11.5px ui-monospace,Menlo,monospace}
+  #props .row{display:grid;grid-template-columns:88px 1fr;gap:6px;align-items:center;margin-bottom:4px}
+  #props label{font-size:11.5px;color:var(--dim);cursor:ew-resize;user-select:none;
+               font-family:ui-monospace,Menlo,monospace}
+  #props label.static{cursor:default}
+  #props input{width:100%;padding:3px 7px;border:1px solid var(--line);border-radius:5px;
+               background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace}
+  #right{flex:1;display:flex;flex-direction:column;background:var(--stage);min-width:320px}
+  #stage{flex:1;overflow:auto;padding:10px}
+  #frameBox{transform-origin:top left;width:1600px}
+  iframe{width:1600px;border:0;display:block;background:#fff;box-shadow:0 1px 8px var(--shadow)}
+  /* .tex 模式：右邊是瀏覽器內建的 PDF viewer，它自己會處理分頁與縮放，
+     所以 1600px 頁框和 transform 縮放全部關掉，讓 iframe 填滿即可。 */
+  :root[data-kind="tex"] #stage{padding:0;overflow:hidden}
+  :root[data-kind="tex"] #frameBox{width:100%!important;height:100%;transform:none!important}
+  :root[data-kind="tex"] iframe{width:100%;height:100%;box-shadow:none}
+  /* 編譯錯誤：只顯示第一個錯誤與行號，完整 log 收在 details 裡。
+     TeX log 動輒上千行，整包丟出來等於沒給。 */
+  #err{display:none;border-top:1px solid var(--line);background:var(--bar);
+       padding:8px 10px;max-height:200px;overflow:auto}
+  #err.show{display:block}
+  #err .hd{color:var(--err);font:700 12px ui-monospace,Menlo,monospace;margin-bottom:4px}
+  #err .hd a{color:var(--accent);font-weight:400;margin-left:8px;cursor:pointer;text-decoration:underline}
+  #err pre{margin:6px 0 0;font:11px/1.45 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-wrap}
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
+  <button id="open">開啟</button>
+  <span class="name" id="name">—</span>
+  <button id="save" class="primary">儲存 ⌘S</button>
+  <button id="pick">選取模式</button>
+  <button id="reload">重新預覽</button>
+  <button id="build">建置 PPTX</button>
+  <button id="dl">下載檔案</button>
+  <button id="sync" class="on" title="游標移到哪一行，PDF 就跳到那一頁">跟隨游標</button>
+  <button id="theme">深色</button>
+  <span id="msg">載入中…</span>
+</div>
+
+<div id="wrap">
+  <div id="left">
+    <div id="find">
+      <input id="q" placeholder="搜尋原始碼…">
+      <button id="prev">↑</button><button id="next">↓</button>
+      <button id="closeFind">✕</button>
+    </div>
+    <div id="ed">
+      <div id="gut"></div>
+      <textarea id="code" spellcheck="false" wrap="off"></textarea>
+    </div>
+    <div id="props">
+      <div class="hd"><b id="pTag">—</b><span id="pLine"></span>
+        <span style="margin-left:auto">拖標籤名可調數值</span></div>
+      <div id="pRows"></div>
+    </div>
+    <div id="err">
+      <div class="hd"><span id="eMsg"></span><a id="eGo">跳到該行</a><a id="eFull">完整 log</a></div>
+      <pre id="eLog" style="display:none"></pre>
+    </div>
+  </div>
+  <div id="split"></div>
+  <div id="right">
+    <div id="pvbar">
+      <button id="pgPrev">◀</button>
+      <span class="pg" id="pgNow">– / –</span>
+      <button id="pgNext">▶</button>
+      <select id="zoom">
+        <option value="fit">符合寬度</option>
+        <option value="1">100%</option>
+        <option value="0.75">75%</option>
+        <option value="0.5">50%</option>
+      </select>
+      <button id="solo">只看預覽</button>
+      <select id="hl" title="高亮樣式">
+        <option value="devtools">高亮：比照 DevTools</option>
+        <option value="soft">高亮：調淡版</option>
+      </select>
+    </div>
+    <div id="stage"><div id="frameBox"><iframe id="pv"></iframe></div></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ── 深色模式（跟隨系統，可手動覆蓋並記住）─────────────
+(function () {
+  const set = (t) => {
+    document.documentElement.dataset.t = t;
+    const b = document.getElementById("theme");
+    if (b) b.textContent = t === "dark" ? "淺色" : "深色";
+  };
+  set(localStorage.getItem("theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  document.getElementById("theme").onclick = () => {
+    const t = document.documentElement.dataset.t === "dark" ? "light" : "dark";
+    localStorage.setItem("theme", t);
+    set(t);
+  };
+})();
+const code = $("code"), gut = $("gut"), pv = $("pv"), msg = $("msg");
+let dirty = false, picking = false;
+
+function say(t, err) { msg.textContent = t; msg.className = err ? "err" : ""; }
+
+function drawGutter() {
+  const n = code.value.split("\n").length;
+  let s = "";
+  for (let i = 1; i <= n; i++) s += i + "\n";
+  gut.textContent = s;
+  gut.scrollTop = code.scrollTop;
+}
+code.addEventListener("scroll", () => (gut.scrollTop = code.scrollTop));
+
+// ── 復原 / 重做 ──────────────────────────────────
+// 程式化改 code.value（拖曳寫回）會清掉瀏覽器原生的 undo 記錄，所以自己維護一份。
+const UNDO = [], REDO = [];
+let snapTimer = 0;
+function snapshot() {
+  const v = code.value;
+  if (UNDO.length && UNDO[UNDO.length - 1] === v) return;
+  UNDO.push(v);
+  if (UNDO.length > 200) UNDO.shift();
+  REDO.length = 0;
+}
+// 復原後直接寫檔並重載預覽，三邊才會一致：
+// 拖曳的改動是即時畫在預覽 DOM 上的，只回退原始碼會讓畫面停在改過的樣子。
+let applyTimer = 0;
+function restore(from, to) {
+  if (!from.length) return say("沒有可復原的動作");
+  to.push(code.value);
+  code.value = from.pop();
+  dirty = true;
+  drawGutter();
+  say("已" + (from === UNDO ? "復原" : "重做"));
+  clearTimeout(applyTimer);
+  applyTimer = setTimeout(save, 250); // 連按時只套用最後一次
+}
+code.addEventListener("input", () => {
+  clearTimeout(snapTimer);
+  snapTimer = setTimeout(snapshot, 400); // 連續打字合併成一次
+  dirty = true;
+  drawGutter();
+  say("未儲存的修改");
+});
+
+// ── 載入 / 儲存 ──────────────────────────────────
+let ST = null;
+const isTex = () => ST && ST.kind === "tex";
+
+// HTML 專用的功能（點選定位、屬性面板、PPTX）在 .tex 模式沒有意義：
+// PDF 是編譯產物，沒有可以對應回原始碼的 DOM。反過來「跟隨游標」也只有 .tex 用得到。
+function applyMode() {
+  const tex = isTex();
+  document.documentElement.dataset.kind = ST.kind;
+  for (const id of ["pick", "build", "dl"]) $(id).style.display = tex ? "none" : "";
+  for (const id of ["pgPrev", "pgNow", "pgNext", "zoom", "hl"]) $(id).style.display = tex ? "none" : "";
+  $("sync").style.display = tex ? "" : "none";
+  if (tex) { $("props").classList.remove("show"); picking = false; $("pick").classList.remove("on"); }
+  else $("err").classList.remove("show");
+}
+
+async function load() {
+  ST = await (await fetch("/state")).json();
+  if (!ST.kind) return say("貼上 .html 或 .tex 的絕對路徑開始", true);
+  applyMode();
+  // 編輯子檔時要明說實際編譯的是哪一份，否則會以為預覽壞了
+  $("name").textContent = ST.name + (isTex() && !ST.isMain ? " → " + ST.main : "");
+  $("path").value = ST.file;
+  $("build").disabled = !ST.hasBuild;
+  $("dl").disabled = !ST.hasBuild;
+  code.value = await (await fetch("/file")).text();
+  drawGutter(); dirty = false;
+  const n = code.value.split("\n").length;
+  if (isTex()) { say(n + " 行 · 首次編譯可能要等 Tectonic 抓 package…"); compile(); }
+  else {
+    say(n + " 行" + (ST.hasBuild ? "" : "（此專案無 build-pptx.sh，不能出 PPTX）"));
+    reloadPreview();
+  }
+}
+
+async function openPath() {
+  if (dirty && !confirm("有未儲存的修改，確定要切換檔案？")) return;
+  const r = await fetch("/open", { method: "POST", body: JSON.stringify({ path: $("path").value }) });
+  const j = await r.json();
+  if (!j.ok) return say(j.error, true);
+  await load();
+}
+$("open").onclick = openPath;
+$("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
+async function save() {
+  const r = await fetch("/file", { method: "POST", body: code.value });
+  const j = await r.json();
+  if (!j.ok) return say("儲存失敗", true);
+  dirty = false;
+  say("已存回 " + ST.name + "（" + j.bytes.toLocaleString() + " bytes）");
+  if (isTex()) compile(); else reloadPreview();
+}
+$("save").onclick = save;
+
+// ── 預覽 ────────────────────────────────────────
+let stamp = 0;      // PDF 的版本戳，換了才代表要重新抓檔
+let curPage = 0;    // 目前跳到第幾頁，沒變就不要重設 src（會閃）
+
+function reloadPreview() {
+  if (!ST) return;
+  if (isTex()) {
+    stamp = Date.now();
+    curPage = 0;
+    pv.src = "/pdf?t=" + stamp;
+  } else {
+    pv.src = ST.previewUrl + "?t=" + Date.now();
+  }
+}
+$("reload").onclick = () => (isTex() ? compile() : reloadPreview());
+
+// ── LaTeX 編譯 ───────────────────────────────────
+// 編譯期間又按了儲存就記著，等這次跑完再補一次，不要讓兩個 tectonic 並行。
+let compiling = false, queued = false;
+async function compile() {
+  if (compiling) { queued = true; return; }
+  compiling = true;
+  const t0 = Date.now();
+  try {
+    const j = await (await fetch("/compile", { method: "POST" })).json();
+    showErr(j);
+    if (j.ok) { say("編譯完成 · " + ((Date.now() - t0) / 1000).toFixed(1) + "s"); reloadPreview(); }
+    else say("編譯失敗：" + (j.error ? j.error.msg : "看下方 log"), true);
+  } catch (e) {
+    say("編譯失敗：" + e.message, true);
+  }
+  compiling = false;
+  if (queued) { queued = false; compile(); }
+}
+
+function showErr(j) {
+  const box = $("err");
+  if (j.ok) return box.classList.remove("show");
+  box.classList.add("show");
+  const e = j.error;
+  // 行號是相對於實際編譯的主檔。編著子檔時跳行會跳錯地方，所以那時不給跳。
+  const sameFile = ST.isMain;
+  $("eMsg").textContent = e
+    ? e.msg + (e.line ? "（" + ST.main + " 第 " + e.line + " 行）" : "")
+    : "編譯失敗";
+  $("eGo").style.display = e && e.line && sameFile ? "" : "none";
+  $("eGo").onclick = () => gotoLine(e.line);
+  $("eLog").textContent = j.log || "";
+  $("eLog").style.display = "none";
+}
+$("eFull").onclick = () => {
+  const el = $("eLog");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+};
+
+// ── 跟隨游標：游標在第幾行，PDF 就跳第幾頁 ──────────
+// 反過來（點 PDF 跳原始碼）做不到：PDF 交給瀏覽器內建 viewer 顯示，
+// 拿不到點擊座標。那要改用 PDF.js 自繪才行，見 NOTES.md。
+let syncOn = true, syncTimer = 0;
+$("sync").onclick = () => {
+  syncOn = !syncOn;
+  $("sync").classList.toggle("on", syncOn);
+  say(syncOn ? "跟隨游標：開" : "跟隨游標：關");
+};
+
+async function syncToCursor() {
+  if (!syncOn || !isTex() || !stamp) return;
+  const line = code.value.slice(0, code.selectionStart).split("\n").length;
+  try {
+    const j = await (await fetch("/page?line=" + line)).json();
+    if (j.page && j.page !== curPage) {
+      curPage = j.page;
+      pv.src = "/pdf?t=" + stamp + "#page=" + j.page;
+    }
+  } catch (e) { /* 查不到就維持現狀，不要打斷編輯 */ }
+}
+const schedSync = () => { clearTimeout(syncTimer); syncTimer = setTimeout(syncToCursor, 350); };
+code.addEventListener("keyup", schedSync);
+code.addEventListener("click", schedSync);
+
+let slides = [], S = 1;
+
+pv.addEventListener("load", () => {
+  // PDF 模式下 iframe 裡是瀏覽器內建的 viewer，沒有可測量的 DOM——
+  // 硬去讀 scrollHeight 會拿到 0，把 iframe 高度壓成看不見。
+  if (isTex()) return;
+  try {
+    const d = pv.contentDocument;
+    pv.style.height = d.documentElement.scrollHeight + "px";
+    slides = [...d.querySelectorAll("section.slide")];
+  } catch (e) { slides = []; }
+  fit();
+  updPage();
+  pv.contentWindow.postMessage({ type: "hlmode", mode: $("hl").value }, "*");
+  if (picking) pv.contentWindow.postMessage({ type: "pick", on: true }, "*");
+});
+
+function fit() {
+  const z = $("zoom").value;
+  S = z === "fit" ? Math.min(1, ($("stage").clientWidth - 20) / 1600) : +z;
+  $("frameBox").style.transform = "scale(" + S + ")";
+  $("frameBox").style.height = pv.offsetHeight * S + "px";
+  // 讓探針知道縮放比，邊界抓取範圍才不會被縮到抓不到
+  try { pv.contentWindow.postMessage({ type: "scale", s: S }, "*"); } catch (e) {}
+}
+addEventListener("resize", fit);
+$("zoom").onchange = () => { fit(); updPage(); };
+
+// ── 頁面導覽 ─────────────────────────────────────
+function updPage() {
+  if (!slides.length) return ($("pgNow").textContent = "– / –");
+  const top = $("stage").scrollTop;
+  let n = 0;
+  for (let i = 0; i < slides.length; i++) if (slides[i].offsetTop * S <= top + 40) n = i;
+  $("pgNow").textContent = n + 1 + " / " + slides.length;
+  $("pgNow").dataset.n = n;
+}
+function goPage(n) {
+  if (!slides.length) return;
+  n = Math.max(0, Math.min(slides.length - 1, n));
+  $("stage").scrollTop = slides[n].offsetTop * S;
+  updPage();
+}
+$("stage").addEventListener("scroll", updPage);
+$("pgPrev").onclick = () => goPage(+($("pgNow").dataset.n || 0) - 1);
+$("pgNext").onclick = () => goPage(+($("pgNow").dataset.n || 0) + 1);
+
+// 只看預覽：把編輯器收起來，再按一次還原
+let soloW = null;
+$("solo").onclick = () => {
+  const L = $("left");
+  if (soloW === null) { soloW = L.style.width || "46%"; L.style.width = "0px"; $("solo").classList.add("on"); }
+  else { L.style.width = soloW; soloW = null; $("solo").classList.remove("on"); }
+  setTimeout(() => { fit(); updPage(); }, 0);
+};
+
+// ── 中間分隔線拖曳 ────────────────────────────────
+// 拖曳期間要蓋一層遮罩，否則滑鼠移到右邊時 mousemove 會被預覽的 iframe 吃掉。
+(function () {
+  const sp = $("split"), L = $("left");
+  let on = false, veil = null, raf = 0;
+
+  const apply = (x) => {
+    const w = Math.max(0, Math.min(innerWidth - 340, x));
+    L.style.width = w + "px";
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; fit(); updPage(); });
+  };
+
+  sp.addEventListener("mousedown", (e) => {
+    on = true;
+    sp.classList.add("drag");
+    veil = document.createElement("div");
+    veil.style.cssText = "position:fixed;inset:0;z-index:99999;cursor:col-resize";
+    document.body.appendChild(veil);
+    document.body.style.userSelect = "none";
+    soloW = null; $("solo").classList.remove("on");
+    e.preventDefault();
+  });
+
+  addEventListener("mousemove", (e) => { if (on) apply(e.clientX); });
+
+  addEventListener("mouseup", () => {
+    if (!on) return;
+    on = false;
+    sp.classList.remove("drag");
+    if (veil) { veil.remove(); veil = null; }
+    document.body.style.userSelect = "";
+    fit(); updPage();
+  });
+
+  sp.addEventListener("dblclick", () => { L.style.width = "46%"; fit(); updPage(); });
+})();
+
+// ── 選取模式：點預覽 → 跳到原始碼那一行 ─────────────
+$("hl").onchange = () => {
+  localStorage.setItem("hl", $("hl").value);
+  pv.contentWindow.postMessage({ type: "hlmode", mode: $("hl").value }, "*");
+};
+$("hl").value = localStorage.getItem("hl") || "devtools";
+
+$("pick").onclick = () => {
+  picking = !picking;
+  $("pick").classList.toggle("on", picking);
+  pv.contentWindow.postMessage({ type: "pick", on: picking }, "*");
+  say(picking ? "選取模式：點畫面上的元素會跳到對應的程式碼" : "選取模式已關閉");
+};
+
+addEventListener("message", (e) => {
+  const d = e.data || {};
+  if (d.type === "goto") {
+    gotoLine(d.line);
+    showProps(d);
+    say("第 " + d.line + " 行 · <" + d.tag + "> " + d.text);
+  }
+  // 在畫布上拖邊界改完間距，寫回原始碼
+  if (d.type === "style") writeStyle(d.i, d.prop, d.value);
+});
+
+// ── 把 CSS 寫回原始碼的 inline style ─────────────────
+// 標籤序號的數法必須跟 server 注入 data-i 時完全一致，否則會寫錯地方。
+const TAGS_SRC = "<(div|section|p|h1|h2|h3|h4|span|b|i|em|small|li|td|th|a|pre|code)\\b";
+function tagStart(src, index) {
+  const lines = src.split("\n");
+  let inStyle = false, n = 0, off = 0;
+  for (const line of lines) {
+    if (/<style\b/i.test(line)) inStyle = true;
+    if (inStyle) {
+      if (/<\/style>/i.test(line)) inStyle = false;
+      off += line.length + 1;
+      continue;
+    }
+    const re = new RegExp(TAGS_SRC, "gi");
+    let m;
+    while ((m = re.exec(line))) {
+      if (n === index) return off + m.index;
+      n++;
+    }
+    off += line.length + 1;
+  }
+  return -1;
+}
+
+function setDecl(tagText, prop, value) {
+  const m = tagText.match(/\sstyle\s*=\s*"([^"]*)"/i);
+  if (!m) return tagText.replace(/^<([a-z0-9]+)/i, '<$1 style="' + prop + ":" + value + '"');
+  let found = false;
+  const decls = m[1].split(";").map((s) => s.trim()).filter(Boolean).map((d) => {
+    if (d.split(":")[0].trim().toLowerCase() === prop) { found = true; return prop + ":" + value; }
+    return d;
+  });
+  if (!found) decls.push(prop + ":" + value);
+  return tagText.replace(m[0], ' style="' + decls.join(";") + '"');
+}
+
+function writeStyle(i, prop, value) {
+  snapshot(); // 拖曳寫回前先存一份，才有得復原
+  const src = code.value;
+  const start = tagStart(src, i);
+  if (start < 0) return say("找不到對應的標籤，請重新整理預覽", true);
+  const gt = src.indexOf(">", start);
+  if (gt < 0) return say("標籤沒有結尾", true);
+  const before = src.slice(0, start);
+  code.value = before + setDecl(src.slice(start, gt + 1), prop, value) + src.slice(gt + 1);
+  dirty = true;
+  drawGutter();
+  say(prop + ": " + value + " → 第 " + (before.split("\n").length) + " 行（未儲存，⌘S 寫入）");
+}
+
+// ── 屬性面板 ────────────────────────────────────
+// 間距用畫布上拖邊界調，這裡只放單值型屬性，拖標籤名改數字。
+const FIELDS = [
+  ["font-size", "fontSize", 1], ["line-height", "lineHeight", 0.05],
+  ["letter-spacing", "letterSpacing", 0.1], ["gap", "gap", 1],
+  ["width", "width", 1], ["border-radius", "borderRadius", 1],
+  ["font-weight", "fontWeight", 50], ["color", "color", 0],
+];
+let sel = null;
+
+function showProps(d) {
+  sel = d;
+  $("props").classList.add("show");
+  $("pTag").textContent = "<" + d.tag + (d.cls ? " class=\"" + d.cls + "\"" : "") + ">";
+  $("pLine").textContent = "第 " + d.line + " 行";
+  const rows = $("pRows");
+  rows.innerHTML = "";
+  for (const [css, key, step] of FIELDS) {
+    const raw = (d.css || {})[key];
+    if (!raw || raw === "normal" || raw === "auto") continue;
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = '<label class="' + (step ? "" : "static") + '">' + css + "</label>" +
+                    '<input value="' + raw + '">';
+    const lab = row.querySelector("label"), inp = row.querySelector("input");
+
+    const push = (v, commit) => {
+      inp.value = v;
+      pv.contentWindow.postMessage({ type: "apply", i: sel.i, prop: key, value: v }, "*");
+      if (commit) writeStyle(sel.i, css, v);
+    };
+    inp.addEventListener("change", () => push(inp.value.trim(), true));
+
+    if (step) {
+      lab.addEventListener("mousedown", (ev) => {
+        const n0 = parseFloat(inp.value) || 0;
+        const unit = (inp.value.match(/[a-z%]+$/i) || [""])[0];
+        const x0 = ev.clientX;
+        const veil = document.createElement("div");
+        veil.style.cssText = "position:fixed;inset:0;z-index:99999;cursor:ew-resize";
+        document.body.appendChild(veil);
+        const mv = (e2) => {
+          const n = Math.max(0, n0 + Math.round((e2.clientX - x0) / 2) * step);
+          push(+n.toFixed(2) + unit, false);
+        };
+        const up = () => {
+          removeEventListener("mousemove", mv); removeEventListener("mouseup", up);
+          veil.remove();
+          push(inp.value, true);
+        };
+        addEventListener("mousemove", mv); addEventListener("mouseup", up);
+        ev.preventDefault();
+      });
+    }
+    rows.appendChild(row);
+  }
+}
+
+function gotoLine(line) {
+  const lines = code.value.split("\n");
+  let start = 0;
+  for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i].length + 1;
+  const end = start + (lines[line - 1] || "").length;
+  code.focus();
+  code.setSelectionRange(start, end);
+  // 把該行捲到視野中間
+  const lh = parseFloat(getComputedStyle(code).lineHeight);
+  code.scrollTop = Math.max(0, (line - 1) * lh - code.clientHeight / 2);
+  gut.scrollTop = code.scrollTop;
+}
+
+// ── 搜尋 ────────────────────────────────────────
+let lastQ = "", lastIdx = -1;
+function find(dir) {
+  const q = $("q").value;
+  if (!q) return;
+  if (q !== lastQ) { lastQ = q; lastIdx = -1; }
+  const hay = code.value;
+  let i;
+  if (dir > 0) {
+    i = hay.indexOf(q, lastIdx + 1);
+    if (i < 0) i = hay.indexOf(q);
+  } else {
+    i = hay.lastIndexOf(q, Math.max(0, lastIdx - 1));
+    if (i < 0) i = hay.lastIndexOf(q);
+  }
+  if (i < 0) return say("找不到「" + q + "」", true);
+  lastIdx = i;
+  code.focus();
+  code.setSelectionRange(i, i + q.length);
+  const line = hay.slice(0, i).split("\n").length;
+  const lh = parseFloat(getComputedStyle(code).lineHeight);
+  code.scrollTop = Math.max(0, (line - 1) * lh - code.clientHeight / 2);
+  gut.scrollTop = code.scrollTop;
+  say("第 " + line + " 行");
+}
+$("next").onclick = () => find(1);
+$("prev").onclick = () => find(-1);
+$("closeFind").onclick = () => $("find").classList.remove("show");
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); find(e.shiftKey ? -1 : 1); } });
+
+// ── 出 PPTX ─────────────────────────────────────
+$("build").onclick = async () => {
+  if (dirty) await save();
+  say("建置中…（約 20–40 秒）");
+  $("build").disabled = true;
+  try {
+    const j = await (await fetch("/build", { method: "POST" })).json();
+    const line = (j.out || "").split("\n").filter((s) => s.trim()).pop() || "";
+    say(j.ok ? "PPTX 完成 · " + line.trim() : "建置失敗：" + line, !j.ok);
+  } catch (e) { say("建置失敗：" + e.message, true); }
+  $("build").disabled = false;
+};
+$("dl").onclick = () => (location.href = "/pptx");
+
+// ── 快捷鍵 ──────────────────────────────────────
+addEventListener("keydown", (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === "z" && !e.shiftKey) { e.preventDefault(); restore(UNDO, REDO); return; }
+  if (mod && (e.key === "Z" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); restore(REDO, UNDO); return; }
+  if (mod && e.key === "s") { e.preventDefault(); save(); }
+  if (mod && e.key === "f") { e.preventDefault(); $("find").classList.add("show"); $("q").focus(); $("q").select(); }
+  if (e.key === "Escape") $("find").classList.remove("show");
+});
+addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+load();
+</script>
+</body>
+</html>
