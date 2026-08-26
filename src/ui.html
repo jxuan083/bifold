@@ -54,6 +54,7 @@
   #pvbar{height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;
          border-bottom:1px solid var(--line);background:var(--bar);font-size:12px;color:var(--dim)}
   #pvbar button{padding:3px 9px}
+  #pvbar .sep{width:1px;height:15px;background:var(--line);margin:0 3px}
   #pvbar .pg{font-variant-numeric:tabular-nums;min-width:56px;text-align:center;color:var(--accent);font-weight:700}
   select{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:5px;
          background:var(--btn);color:var(--fg)}
@@ -84,11 +85,17 @@
   #stage{flex:1;overflow:auto;padding:10px}
   #frameBox{transform-origin:top left;width:1600px}
   iframe{width:1600px;border:0;display:block;background:#fff;box-shadow:0 1px 8px var(--shadow)}
-  /* .tex 模式：右邊是瀏覽器內建的 PDF viewer，它自己會處理分頁與縮放，
-     所以 1600px 頁框和 transform 縮放全部關掉，讓 iframe 填滿即可。 */
-  :root[data-kind="tex"] #stage{padding:0;overflow:hidden}
-  :root[data-kind="tex"] #frameBox{width:100%!important;height:100%;transform:none!important}
-  :root[data-kind="tex"] iframe{width:100%;height:100%;box-shadow:none}
+  /* .tex 模式：PDF 由 PDF.js 自己畫到 canvas 上。用內建 viewer 就拿不到點擊座標，
+     也就做不成「點 PDF 跳原始碼」，那才是這個工具的主要互動。 */
+  :root[data-kind="tex"] #frameBox{display:none}
+  #pdfBox{display:none;flex-direction:column;align-items:center;gap:14px;padding:14px}
+  :root[data-kind="tex"] #pdfBox{display:flex}
+  #pdfBox .pg{position:relative;background:#fff;box-shadow:0 1px 8px var(--shadow)}
+  #pdfBox canvas{display:block;cursor:text}
+  /* 點過的位置閃一下，讓人確認自己點到的是哪一行 */
+  #pdfBox .mark{position:absolute;background:rgba(255,45,155,.30);border-radius:2px;
+                pointer-events:none;opacity:1;transition:opacity 1.1s ease-out}
+  #pdfBox .mark.fade{opacity:0}
   /* 編譯錯誤：只顯示第一個錯誤與行號，完整 log 收在 details 裡。
      TeX log 動輒上千行，整包丟出來等於沒給。 */
   #err{display:none;border-top:1px solid var(--line);background:var(--bar);
@@ -107,8 +114,7 @@
   <button id="open">開啟</button>
   <span class="name" id="name">—</span>
   <button id="save" class="primary">儲存 ⌘S</button>
-  <button id="pick">選取模式</button>
-  <button id="reload">重新預覽</button>
+  <button id="pick" title="⌘E 切換，Esc 退出">選取模式</button>
   <button id="build">建置 PPTX</button>
   <button id="dl">下載檔案</button>
   <button id="sync" class="on" title="游標移到哪一行，PDF 就跳到那一頁">跟隨游標</button>
@@ -144,6 +150,8 @@
   <div id="split"></div>
   <div id="right">
     <div id="pvbar">
+      <button id="reload">重新預覽</button>
+      <span class="sep"></span>
       <button id="pgPrev">◀</button>
       <span class="pg" id="pgNow">– / –</span>
       <button id="pgNext">▶</button>
@@ -159,7 +167,10 @@
         <option value="soft">高亮：調淡版</option>
       </select>
     </div>
-    <div id="stage"><div id="frameBox"><iframe id="pv"></iframe></div></div>
+    <div id="stage">
+      <div id="frameBox"><iframe id="pv"></iframe></div>
+      <div id="pdfBox"></div>
+    </div>
   </div>
 </div>
 
@@ -237,8 +248,12 @@ function applyMode() {
   const tex = isTex();
   document.documentElement.dataset.kind = ST.kind;
   for (const id of ["pick", "build", "dl"]) $(id).style.display = tex ? "none" : "";
-  for (const id of ["pgPrev", "pgNow", "pgNext", "zoom", "hl"]) $(id).style.display = tex ? "none" : "";
+  // 頁碼導覽兩種模式都有意義（投影片 / PDF 頁），縮放與高亮樣式只有 HTML 用得到
+  for (const id of ["zoom", "hl"]) $(id).style.display = tex ? "none" : "";
   $("sync").style.display = tex ? "" : "none";
+  // 這顆按鈕作用的對象是右邊那一欄，所以它放在右邊；.tex 時它就是 Recompile
+  $("reload").textContent = tex ? "重新編譯" : "重新預覽";
+  $("reload").classList.toggle("primary", tex);
   if (tex) {
     $("props").classList.remove("show"); picking = false; $("pick").classList.remove("on");
     // 頁面剛載入時 ST 還是 null，空 iframe 觸發的 load 事件會讓 fit() 溜過守衛，
@@ -247,7 +262,12 @@ function applyMode() {
     $("frameBox").style.transform = "";
     $("frameBox").style.height = "";
     pv.style.height = "";
-  } else $("err").classList.remove("show");
+  } else {
+    $("err").classList.remove("show");
+    // canvas 很吃記憶體，切回 HTML 就沒必要留著上一份 PDF 的每一頁
+    $("pdfBox").innerHTML = "";
+    pages = [];
+  }
 }
 
 async function load() {
@@ -338,18 +358,104 @@ async function save() {
 $("save").onclick = save;
 
 // ── 預覽 ────────────────────────────────────────
-let stamp = 0;      // PDF 的版本戳，換了才代表要重新抓檔
-let curPage = 0;    // 目前跳到第幾頁，沒變就不要重設 src（會閃）
+let curPage = 0;    // 目前捲到第幾頁，沒變就不重捲
 
 function reloadPreview() {
   if (!ST) return;
-  if (isTex()) {
-    stamp = Date.now();
-    curPage = 0;
-    pv.src = "/pdf?t=" + stamp;
-  } else {
-    pv.src = ST.previewUrl + "?t=" + Date.now();
+  if (isTex()) renderPdf();
+  else pv.src = ST.previewUrl + "?t=" + Date.now();
+}
+
+// ── PDF.js ──────────────────────────────────────
+// 用動態 import 載入，這樣主程式不必是 module，其餘邏輯完全不動。
+let pdfjs = null;
+async function getPdfjs() {
+  if (!pdfjs) {
+    pdfjs = await import("/vendor/pdf.min.mjs");
+    pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
   }
+  return pdfjs;
+}
+
+const PDF_SCALE = 1.6;   // 渲染倍率。夠銳利又不會讓大論文吃掉太多記憶體
+let pages = [];          // 每頁的外框 div，捲動定位用
+let rendering = false;
+
+async function renderPdf() {
+  if (rendering) return;
+  rendering = true;
+  const box = $("pdfBox");
+  try {
+    const lib = await getPdfjs();
+    // 每次都換 URL，否則改完重編會拿到瀏覽器快取的舊 PDF
+    const doc = await lib.getDocument({ url: "/pdf?t=" + Date.now() }).promise;
+    const keep = $("stage").scrollTop;   // 重編後留在原處，不要每次都彈回第一頁
+
+    box.innerHTML = "";
+    pages = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const vp = page.getViewport({ scale: PDF_SCALE });
+      const wrap = document.createElement("div");
+      wrap.className = "pg";
+      wrap.style.width = vp.width + "px";
+      wrap.style.height = vp.height + "px";
+      const cv = document.createElement("canvas");
+      cv.width = vp.width; cv.height = vp.height;
+      cv.dataset.page = n;
+      wrap.appendChild(cv);
+      box.appendChild(wrap);
+      pages.push(wrap);
+      await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+    }
+    $("stage").scrollTop = Math.min(keep, $("stage").scrollHeight);
+    updPage();
+  } catch (e) {
+    box.innerHTML = "";
+    say("PDF 顯示失敗：" + e.message, true);
+  }
+  rendering = false;
+}
+
+function scrollToPage(n) {
+  const el = pages[n - 1];
+  if (el) $("stage").scrollTop = el.offsetTop - 14;
+}
+
+// 點 PDF → 跳原始碼。跨檔會自動切過去，因為論文的每一節多半在自己的檔案裡。
+$("pdfBox").addEventListener("click", async (e) => {
+  const cv = e.target.closest("canvas");
+  if (!cv || !isTex()) return;
+
+  const r = cv.getBoundingClientRect();
+  // canvas 的顯示尺寸未必等於它的像素尺寸，先換回像素再除掉渲染倍率才是 pt
+  const x = (e.clientX - r.left) * (cv.width / r.width) / PDF_SCALE;
+  const y = (e.clientY - r.top) * (cv.height / r.height) / PDF_SCALE;
+
+  let j;
+  try {
+    j = await (await fetch(`/rsync?page=${cv.dataset.page}&x=${x}&y=${y}`)).json();
+  } catch (err) { return; }
+  if (!j.file) return say("那個位置沒有對得上的原始碼");
+
+  mark(cv, e.clientX - r.left, e.clientY - r.top);
+  if (j.file !== ST.file) {
+    if (dirty && !confirm("有未儲存的修改，確定要切到 " + j.file.split("/").pop() + "？")) return;
+    $("path").value = j.file;
+    await openPath();
+  }
+  gotoLine(j.line);
+  say(j.file.split("/").pop() + " 第 " + j.line + " 行" + (j.exact ? "" : "（最接近的一行）"));
+});
+
+// 點過的地方閃一下再淡出，確認自己點到的是哪裡
+function mark(cv, x, y) {
+  const el = document.createElement("div");
+  el.className = "mark";
+  el.style.cssText += `left:${x - 22}px;top:${y - 9}px;width:44px;height:18px`;
+  cv.parentElement.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("fade"));
+  setTimeout(() => el.remove(), 1300);
 }
 $("reload").onclick = () => (isTex() ? compile() : reloadPreview());
 
@@ -359,6 +465,8 @@ let compiling = false, queued = false;
 async function compile() {
   if (compiling) { queued = true; return; }
   compiling = true;
+  $("reload").disabled = true;
+  $("reload").textContent = "編譯中…";
   const t0 = Date.now();
   try {
     const j = await (await fetch("/compile", { method: "POST" })).json();
@@ -369,6 +477,8 @@ async function compile() {
     say("編譯失敗：" + e.message, true);
   }
   compiling = false;
+  $("reload").disabled = false;
+  $("reload").textContent = "重新編譯";
   if (queued) { queued = false; compile(); }
 }
 
@@ -403,13 +513,13 @@ $("sync").onclick = () => {
 };
 
 async function syncToCursor() {
-  if (!syncOn || !isTex() || !stamp) return;
+  if (!syncOn || !isTex() || !pages.length) return;
   const line = code.value.slice(0, code.selectionStart).split("\n").length;
   try {
     const j = await (await fetch("/page?line=" + line)).json();
     if (j.page && j.page !== curPage) {
       curPage = j.page;
-      pv.src = "/pdf?t=" + stamp + "#page=" + j.page;
+      scrollToPage(j.page);
     }
   } catch (e) { /* 查不到就維持現狀，不要打斷編輯 */ }
 }
@@ -449,18 +559,24 @@ addEventListener("resize", fit);
 $("zoom").onchange = () => { fit(); updPage(); };
 
 // ── 頁面導覽 ─────────────────────────────────────
+// 投影片與 PDF 頁共用這套導覽。差別只在 HTML 的預覽有縮放係數，PDF 的 canvas 沒有。
+const pageList = () => (isTex() ? pages : slides);
+const pageK = () => (isTex() ? 1 : S);
+
 function updPage() {
-  if (!slides.length) return ($("pgNow").textContent = "– / –");
-  const top = $("stage").scrollTop;
+  const list = pageList();
+  if (!list.length) return ($("pgNow").textContent = "– / –");
+  const top = $("stage").scrollTop, k = pageK();
   let n = 0;
-  for (let i = 0; i < slides.length; i++) if (slides[i].offsetTop * S <= top + 40) n = i;
-  $("pgNow").textContent = n + 1 + " / " + slides.length;
+  for (let i = 0; i < list.length; i++) if (list[i].offsetTop * k <= top + 40) n = i;
+  $("pgNow").textContent = n + 1 + " / " + list.length;
   $("pgNow").dataset.n = n;
 }
 function goPage(n) {
-  if (!slides.length) return;
-  n = Math.max(0, Math.min(slides.length - 1, n));
-  $("stage").scrollTop = slides[n].offsetTop * S;
+  const list = pageList();
+  if (!list.length) return;
+  n = Math.max(0, Math.min(list.length - 1, n));
+  $("stage").scrollTop = list[n].offsetTop * pageK() - (isTex() ? 14 : 0);
   updPage();
 }
 $("stage").addEventListener("scroll", updPage);
@@ -710,7 +826,12 @@ addEventListener("keydown", (e) => {
   if (mod && (e.key === "Z" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); restore(REDO, UNDO); return; }
   if (mod && e.key === "s") { e.preventDefault(); save(); }
   if (mod && e.key === "f") { e.preventDefault(); $("find").classList.add("show"); $("q").focus(); $("q").select(); }
-  if (e.key === "Escape") $("find").classList.remove("show");
+  // 不用 DevTools 慣例的 ⌘⇧C，那個會被 Chrome 自己攔走，網頁收不到
+  if (mod && e.key === "e") { e.preventDefault(); if (!isTex()) $("pick").click(); }
+  if (e.key === "Escape") {
+    if ($("find").classList.contains("show")) $("find").classList.remove("show");
+    else if (picking) $("pick").click();
+  }
 });
 addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 

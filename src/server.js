@@ -22,7 +22,8 @@ const DEFAULT = process.argv[3] || "";
 
 const MIME = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".svg": "image/svg+xml", ".pdf": "application/pdf", ".mp4": "video/mp4",
   ".m4a": "audio/mp4", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf",
@@ -133,6 +134,14 @@ http.createServer(async (req, res) => {
   const p = decodeURIComponent(url.pathname);
 
   if (p === "/") return send(res, 200, MIME[".html"], fs.readFileSync(path.join(__dirname, "ui.html")));
+
+  // PDF.js 直接從 node_modules 供應。它是 ESM，瀏覽器能直接 import，不需要打包工具。
+  if (p.startsWith("/vendor/")) {
+    const f = path.join(__dirname, "..", "node_modules", "pdfjs-dist", "build", path.basename(p));
+    if (!fs.existsSync(f)) return send(res, 404, "text/plain", "缺少 pdfjs-dist，請先 npm install");
+    res.writeHead(200, { "Content-Type": MIME[".mjs"], "Cache-Control": "max-age=86400" });
+    return fs.createReadStream(f).pipe(res);
+  }
   if (p === "/state") return json(res, 200, state() || { kind: null });
 
   // 切換要編輯的檔案
@@ -185,6 +194,15 @@ http.createServer(async (req, res) => {
   if (p === "/tree") {
     const exts = cur.kind === "tex" ? /\.(tex|bib|sty|cls)$/i : /\.html?$/i;
     return json(res, 200, { root: cur.root, files: walk(cur.root, exts) });
+  }
+
+  // 點了 PDF 第 page 頁的 (x, y)（單位 pt）→ 是原始碼哪一檔的哪一行
+  if (p === "/rsync") {
+    const r = synctex.reverse(sxIndex,
+      +url.searchParams.get("page") || 1,
+      +url.searchParams.get("x") || 0,
+      +url.searchParams.get("y") || 0);
+    return json(res, 200, r || {});
   }
 
   // 游標在第幾行 → PDF 該跳第幾頁

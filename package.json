@@ -2,9 +2,25 @@
   "name": "bifold",
   "version": "0.1.0",
   "description": "左邊原始碼、右邊成品的本機編輯器。HTML 直接預覽，LaTeX 用 Tectonic 編成 PDF。",
-  "bin": { "bifold": "src/server.js" },
-  "scripts": { "start": "node src/server.js" },
-  "keywords": ["latex", "tectonic", "html", "live-preview", "synctex", "editor"],
+  "bin": {
+    "bifold": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "keywords": [
+    "latex",
+    "tectonic",
+    "html",
+    "live-preview",
+    "synctex",
+    "editor"
+  ],
   "license": "MIT",
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^6.2.108"
+  }
 }
