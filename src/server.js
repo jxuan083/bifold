@@ -95,6 +95,20 @@ ${fs.readFileSync(path.join(__dirname, "probe.js"), "utf8")}
   return body.includes("</body>") ? body.replace("</body>", probe + "\n</body>") : body + probe;
 }
 
+// SyncTeX 把整個段落標在 \par 的位置，而 \par 通常就是段落後面那個空行。
+// 直接跳過去會停在一行空白上，看起來像壞掉。往上退到最近的有內容的行，
+// 也就是該段落的最後一行——這是 SyncTeX 的粒度能給的最好結果。
+function snapToContent(file, line) {
+  try {
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    let i = Math.min(line, lines.length) - 1;
+    while (i > 0 && !lines[i].trim()) i--;
+    return i + 1;
+  } catch (e) {
+    return line;
+  }
+}
+
 const VENDOR = {
   "pdf.min.mjs": "pdfjs-dist/build/pdf.min.mjs",
   "pdf.worker.min.mjs": "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -171,26 +185,46 @@ const server = http.createServer(async (req, res) => {
 
   // 原生選檔對話框。瀏覽器的 <input type="file"> 拿不到絕對路徑（安全限制），
   // 而這個工具就是靠絕對路徑讀寫真實檔案的，所以只能請 macOS 出面。
+  //
+  // 用 NSOpenPanel 而不是 AppleScript 的 choose file / choose folder：
+  // 那兩個是不同指令，會逼使用者在按下按鈕之前就先決定「我要選檔還是選資料夾」。
+  // NSOpenPanel 兩種都收，一顆按鈕就夠。
   if (p === "/pick") {
-    const dir = url.searchParams.get("type") === "dir";
-    const script = dir
-      ? 'POSIX path of (choose folder with prompt "選擇專案資料夾")'
-      : 'POSIX path of (choose file with prompt "選擇要編輯的檔案" of type {"html","htm","tex"})';
-    return execFile("osascript", ["-e", script], { timeout: 300000 }, (err, stdout) => {
-      // 使用者按取消也會走到 err，那不是錯誤，安靜收工就好
-      if (err) return json(res, 200, { ok: false });
-      let picked = stdout.trim().replace(/\/$/, "");
-      if (dir) {
-        // 資料夾本身不能編輯，挑一個主檔進去。挑不到就讓前端說明白。
-        const cands = walk(picked, /\.(tex|html?)$/i);
-        const best = cands.find((f) => /^(main|paper|thesis|index)\.(tex|html?)$/i.test(f))
-          || cands.find((f) => f.endsWith(".tex") && latex.findMain(path.join(picked, f)) === path.join(picked, f))
-          || cands[0];
-        if (!best) return json(res, 200, { ok: false, error: "這個資料夾裡沒有 .tex 或 .html" });
-        picked = path.join(picked, best);
-      }
-      json(res, 200, { ok: true, path: picked });
-    });
+    const script = `
+ObjC.import("AppKit");
+const panel = $.NSOpenPanel.openPanel;
+panel.canChooseFiles = true;
+panel.canChooseDirectories = true;
+panel.allowsMultipleSelection = false;
+panel.message = "選擇 .tex / .html 檔，或整個專案資料夾";
+panel.prompt = "開啟";
+$.NSApplication.sharedApplication.activateIgnoringOtherApps(true);
+panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
+`;
+    return execFile("osascript", ["-l", "JavaScript", "-e", script],
+      { timeout: 600000 }, (err, stdout) => {
+        if (err) return json(res, 200, { ok: false });
+        let picked = (stdout || "").trim().replace(/\/$/, "");
+        if (!picked) return json(res, 200, { ok: false });   // 按了取消
+
+        try {
+          if (fs.statSync(picked).isDirectory()) {
+            // 資料夾本身不能編輯，挑一個主檔進去。挑不到就讓前端說明白。
+            const cands = walk(picked, /\.(tex|html?)$/i);
+            const best = cands.find((f) => /^(main|paper|thesis|index)\.(tex|html?)$/i.test(f))
+              || cands.find((f) => f.endsWith(".tex")
+                   && latex.findMain(path.join(picked, f)) === path.join(picked, f))
+              || cands[0];
+            if (!best) return json(res, 200, { ok: false, error: "這個資料夾裡沒有 .tex 或 .html" });
+            picked = path.join(picked, best);
+          } else if (!/\.(tex|html?)$/i.test(picked)) {
+            return json(res, 200, { ok: false, error: "只能開 .tex 或 .html" });
+          }
+        } catch (e) {
+          return json(res, 200, { ok: false, error: e.message });
+        }
+        json(res, 200, { ok: true, path: picked });
+      });
   }
 
   if (!cur) return send(res, 404, "text/plain", "尚未開啟任何檔案");
@@ -240,6 +274,7 @@ const server = http.createServer(async (req, res) => {
       +url.searchParams.get("page") || 1,
       +url.searchParams.get("x") || 0,
       +url.searchParams.get("y") || 0);
+    if (r) r.line = snapToContent(r.file, r.line);
     return json(res, 200, r || {});
   }
 

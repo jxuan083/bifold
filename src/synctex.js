@@ -132,7 +132,12 @@ function reverse(idx, page, x, y) {
   if (b.h + b.d > LINE_MAX) return null;
   const file = idx.files.get(b.tag);
   if (!file) return null;
-  return { file, line: b.line, exact: !!r.hit };
+  return {
+    file, line: b.line, exact: !!r.hit,
+    // 幾何一併回傳，前端才能把「系統認為你點到這裡」畫出來。
+    // 反查不可能永遠精準，讓它可見比假裝準確好。
+    box: { x: b.x, y: b.y, w: b.w, h: b.h, d: b.d },
+  };
 }
 
 // 查某個檔的第 line 行落在第幾頁。
