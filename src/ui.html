@@ -45,7 +45,8 @@
   #termBar b{color:var(--fg);font-weight:600}
   #termBar .cwd{font-family:ui-monospace,Menlo,monospace;overflow:hidden;
                 text-overflow:ellipsis;white-space:nowrap}
-  #termBar button{margin-left:auto;padding:1px 7px;font-size:11px;cursor:pointer}
+  #termBar button{padding:1px 7px;font-size:11px;cursor:pointer}
+  #termBar button:first-of-type{margin-left:auto}
   #term{flex:1;min-height:0;padding:4px 6px}
   /* 檔案樹：論文是多檔案的，要切檔卻得手動貼絕對路徑實在很煩 */
   #tree{width:212px;flex:0 0 212px;display:none;flex-direction:column;
@@ -194,6 +195,7 @@
 <div id="termWrap">
   <div id="termBar">
     <b>終端機</b><span class="cwd" id="termCwd"></span>
+    <button id="termRestart" title="關掉現在這個 shell，開一個新的">重啟</button>
     <button id="termClose">✕</button>
   </div>
   <div id="term"></div>
@@ -898,26 +900,41 @@ const termTheme = () => document.documentElement.dataset.t === "dark"
 window.__syncTermTheme = () => { if (term) term.options.theme = termTheme(); };
 
 async function initTerm() {
-  if (term) return;
-  await loadScript("/vendor/xterm.js");
-  await loadScript("/vendor/addon-fit.js");
+  if (!term) {
+    await loadScript("/vendor/xterm.js");
+    await loadScript("/vendor/addon-fit.js");
 
-  term = new Terminal({
-    fontSize: 12,
-    fontFamily: 'ui-monospace, Menlo, monospace',
-    cursorBlink: true,
-    theme: termTheme(),
-  });
-  fitAddon = new FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  term.open($("term"));
-  fitAddon.fit();
+    term = new Terminal({
+      fontSize: 12,
+      fontFamily: 'ui-monospace, Menlo, monospace',
+      cursorBlink: true,
+      theme: termTheme(),
+    });
+    fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open($("term"));
+    fitAddon.fit();
 
+    // 這個只綁一次。斷線之後任何輸入都當成「我要重連」，
+    // 因為那正是使用者發現斷線的時機——他總是先敲個鍵試試看。
+    term.onData((d) => {
+      if (termSock && termSock.readyState === 1) termSock.send(d);
+      else connectTerm();
+    });
+  }
+  connectTerm();
+}
+
+// pty 結束（打了 exit）、server 重啟、電腦睡醒，socket 都會關。
+// 之前這裡沒有重連，關掉面板再開也沒用——initTerm 開頭就早退了。
+function connectTerm() {
+  if (termSock && termSock.readyState <= 1) return;   // 連線中或已連上
+  term.write("\r\n\x1b[90m連線中…\x1b[0m\r\n");
   termSock = new WebSocket("ws://" + location.host + "/term");
-  termSock.onopen = () => sendResize();
+  termSock.onopen = () => { term.write("\x1b[2J\x1b[H"); sendResize(); };
   termSock.onmessage = (e) => term.write(e.data);
-  termSock.onclose = () => term.write("\r\n\x1b[90m[終端機已結束，關掉再開可重啟]\x1b[0m\r\n");
-  term.onData((d) => { if (termSock.readyState === 1) termSock.send(d); });
+  termSock.onclose = () => term.write("\r\n\x1b[90m[連線中斷。按任意鍵重新連線]\x1b[0m\r\n");
+  termSock.onerror = () => {};
 }
 
 // pty 要知道視窗多大，否則 vim、less 這類全螢幕程式會畫錯
@@ -940,6 +957,12 @@ async function toggleTerm() {
 }
 $("termBtn").onclick = toggleTerm;
 $("termClose").onclick = (e) => { e.stopPropagation(); toggleTerm(); };
+$("termRestart").onclick = (e) => {
+  e.stopPropagation();
+  if (termSock && termSock.readyState <= 1) termSock.close();  // onclose 之後才連得起來
+  setTimeout(connectTerm, 120);
+  term && term.focus();
+};
 
 // 拖 termBar 調高度
 (function () {
