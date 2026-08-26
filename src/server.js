@@ -65,8 +65,10 @@ function makeCtx(file) {
   file = path.resolve(file);
   if (!fs.existsSync(file)) throw new Error("找不到檔案：" + file);
   if (/\.html?$/i.test(file)) return htmlCtx(file);
-  if (/\.tex$/i.test(file)) return texCtx(file);
-  throw new Error("只能編輯 .html 或 .tex 檔");
+  // .bib / .sty / .cls 也走 LaTeX 專案：它們本身不是主檔，但改了要重編，
+  // 而且檔案樹本來就把它們列出來了——列了卻打不開很怪。
+  if (/\.(tex|bib|sty|cls)$/i.test(file)) return texCtx(file);
+  throw new Error("只能編輯 .html / .tex / .bib / .sty / .cls");
 }
 
 let cur = DEFAULT ? makeCtx(DEFAULT) : null;
@@ -217,8 +219,8 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
               || cands[0];
             if (!best) return json(res, 200, { ok: false, error: "這個資料夾裡沒有 .tex 或 .html" });
             picked = path.join(picked, best);
-          } else if (!/\.(tex|html?)$/i.test(picked)) {
-            return json(res, 200, { ok: false, error: "只能開 .tex 或 .html" });
+          } else if (!/\.(tex|bib|sty|cls|html?)$/i.test(picked)) {
+            return json(res, 200, { ok: false, error: "只能開 .tex / .bib / .sty / .cls / .html" });
           }
         } catch (e) {
           return json(res, 200, { ok: false, error: e.message });
@@ -260,6 +262,32 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
       "Cache-Control": "no-store",
     });
     return fs.createReadStream(lastBuild.pdf).pipe(res);
+  }
+
+  // 新增檔案。只做新增，不做刪除與改名——那兩個 Finder 做更安全，
+  // 而這個工具的定位是微調成品，不是檔案管理器。
+  if (p === "/new" && req.method === "POST") {
+    try {
+      const rel = (JSON.parse(await readBody(req)).name || "").trim();
+      if (!rel) return json(res, 200, { ok: false, error: "要給檔名" });
+      const target = path.resolve(cur.root, rel);
+      // 不准跳出專案資料夾
+      if (target !== cur.root && !target.startsWith(cur.root + path.sep))
+        return json(res, 200, { ok: false, error: "只能建在專案資料夾裡" });
+      if (!/\.(tex|bib|sty|cls|html?)$/i.test(target))
+        return json(res, 200, { ok: false, error: "副檔名要是 .tex / .bib / .sty / .cls / .html" });
+      if (fs.existsSync(target)) return json(res, 200, { ok: false, error: "這個檔案已經存在" });
+
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      // .tex 給一行 \section 起頭，省得開了是全空的還要想從哪寫
+      const seed = /\.tex$/i.test(target)
+        ? "\\section{" + path.basename(target).replace(/\.tex$/i, "") + "}\n\n"
+        : "";
+      fs.writeFileSync(target, seed, "utf8");
+      return json(res, 200, { ok: true, path: target });
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message });
+    }
   }
 
   // 專案檔案樹。論文是多檔案的，要切檔卻得手動貼絕對路徑，這件事很煩。

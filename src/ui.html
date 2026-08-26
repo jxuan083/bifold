@@ -50,14 +50,31 @@
   #termBar .cwd{font-family:ui-monospace,Menlo,monospace;overflow:hidden;
                 text-overflow:ellipsis;white-space:nowrap}
   #termBar button{padding:1px 7px;font-size:11px;cursor:pointer}
-  #termBar button:first-of-type{margin-left:auto}
-  #term{flex:1;min-height:0;padding:4px 6px}
+  #termBar .cwd{margin-left:auto}
+  #termTabs{display:flex;gap:4px;align-items:center}
+  #termTabs .tab{display:flex;align-items:center;gap:5px;padding:2px 6px 2px 9px;
+                 border:1px solid var(--line);border-radius:4px;cursor:pointer;
+                 font-size:11px;color:var(--dim);white-space:nowrap}
+  #termTabs .tab.on{background:var(--accent);border-color:var(--accent);color:var(--onaccent)}
+  #termTabs .tab .x{opacity:.55;font-size:12px;line-height:1;padding:0 1px}
+  #termTabs .tab .x:hover{opacity:1}
+  #termNew{padding:1px 8px;font-size:13px;line-height:1.1}
+  #termPanes{flex:1;min-height:0;position:relative}
+  #termPanes .pane{position:absolute;inset:0;padding:4px 6px;display:none}
+  #termPanes .pane.on{display:block}
   /* 檔案樹：論文是多檔案的，要切檔卻得手動貼絕對路徑實在很煩 */
   #tree{width:212px;flex:0 0 212px;display:none;flex-direction:column;
         border-right:1px solid var(--line);background:var(--bar);overflow:auto}
   #tree.show{display:flex}
-  #tree .th{padding:9px 12px 7px;font-size:10.5px;color:var(--dim);
-            letter-spacing:.08em;border-bottom:1px solid var(--edge)}
+  #tree .th{display:flex;align-items:center;gap:6px;padding:7px 8px 6px 12px;
+            font-size:10.5px;color:var(--dim);letter-spacing:.08em;
+            border-bottom:1px solid var(--edge)}
+  #tree .th span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #tree .th button{margin-left:auto;padding:0 6px;font-size:13px;line-height:1.3}
+  #tName{display:none;width:calc(100% - 16px);margin:6px 8px;padding:4px 7px;
+         border:1px solid var(--accent);border-radius:5px;background:var(--btn);
+         color:var(--fg);font:11.5px ui-monospace,Menlo,monospace}
+  #tName.show{display:block}
   #tree .d{padding:8px 12px 3px;font:10.5px ui-monospace,Menlo,monospace;color:var(--dim)}
   #tree .f{padding:4px 12px;font:12px/1.5 ui-monospace,Menlo,monospace;cursor:pointer;
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -160,7 +177,8 @@
 
 <div id="wrap">
   <div id="tree">
-    <div class="th" id="tRoot">檔案</div>
+    <div class="th"><span id="tRoot">檔案</span><button id="tNew" title="在專案裡新增檔案">＋</button></div>
+    <input id="tName" placeholder="sections/method.tex　Enter 建立" spellcheck="false">
     <div id="tlist"></div>
   </div>
   <div id="left">
@@ -212,11 +230,12 @@
 
 <div id="termWrap">
   <div id="termBar">
-    <b>終端機</b><span class="cwd" id="termCwd"></span>
-    <button id="termRestart" title="關掉現在這個 shell，開一個新的">重啟</button>
-    <button id="termClose">✕</button>
+    <div id="termTabs"></div>
+    <button id="termNew" title="開一個新的 shell">＋</button>
+    <span class="cwd" id="termCwd"></span>
+    <button id="termClose" title="收起終端機">✕</button>
   </div>
-  <div id="term"></div>
+  <div id="termPanes"></div>
 </div>
 
 <script>
@@ -515,6 +534,29 @@ async function loadTree() {
     list.appendChild(el);
   }
 }
+
+// 用 inline 輸入而不是 prompt()：prompt 會凍住整個分頁，
+// 連帶把編譯、預覽這些非同步流程一起卡住。
+$("tNew").onclick = (e) => {
+  e.stopPropagation();
+  const box = $("tName");
+  box.classList.add("show");
+  box.value = "";
+  box.focus();
+};
+$("tName").addEventListener("keydown", async (e) => {
+  if (e.key === "Escape") { $("tName").classList.remove("show"); return; }
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const name = $("tName").value.trim();
+  if (!name) return;
+  const j = await (await fetch("/new", { method: "POST", body: JSON.stringify({ name }) })).json();
+  if (!j.ok) return say(j.error, true);
+  $("tName").classList.remove("show");
+  $("path").value = j.path;
+  await openPath();
+  say("已建立 " + name);
+});
 
 $("menu").onclick = () => {
   const on = $("tree").classList.toggle("show");
@@ -1158,7 +1200,11 @@ addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.ret
 
 // ── 終端機 ──────────────────────────────────────
 // 開的是真的 shell，所以 tectonic、git、claude 這些原本就在用的東西全都直接能跑。
-let term = null, termSock = null, fitAddon = null;
+// 多分頁：後端本來就是一個連線一個 pty，前端多開幾個 WebSocket 就是多個 shell。
+//
+// 沒有 ⌘T / ⌘W：那兩個會被 Chrome 自己攔走（開新分頁 / 關閉分頁），網頁收不到。
+let xterm = null;                 // 已載入的 xterm 模組
+let tabs = [], actTab = null, tabSeq = 0;
 
 const loadScript = (src) => new Promise((ok, bad) => {
   const s = document.createElement("script");
@@ -1170,73 +1216,115 @@ const termTheme = () => document.documentElement.dataset.t === "dark"
   ? { background: "#141414", foreground: "#cccccc", cursor: "#cccccc" }
   : { background: "#1f1f1f", foreground: "#dddddd", cursor: "#dddddd" };
 
-// 掛到 window 讓主題切換能呼叫。直接讓那邊碰 term 會踩到 TDZ。
-window.__syncTermTheme = () => { if (term) term.options.theme = termTheme(); };
+// 掛到 window 讓主題切換能呼叫。直接讓那邊碰 tabs 會踩到 TDZ。
+window.__syncTermTheme = () => {
+  for (const t of tabs) t.term.options.theme = termTheme();
+};
 
-async function initTerm() {
-  if (!term) {
-    await loadScript("/vendor/xterm.js");
-    await loadScript("/vendor/addon-fit.js");
+async function loadXterm() {
+  if (xterm) return;
+  await loadScript("/vendor/xterm.js");
+  await loadScript("/vendor/addon-fit.js");
+  xterm = { Terminal, FitAddon: FitAddon.FitAddon };
+}
 
-    term = new Terminal({
-      fontSize: 12,
-      fontFamily: 'ui-monospace, Menlo, monospace',
-      cursorBlink: true,
-      theme: termTheme(),
-    });
-    fitAddon = new FitAddon.FitAddon();
-    term.loadAddon(fitAddon);
-    term.open($("term"));
-    fitAddon.fit();
+async function newTab() {
+  try { await loadXterm(); } catch (e) { return say(e.message, true); }
 
-    // 這個只綁一次。斷線之後任何輸入都當成「我要重連」，
-    // 因為那正是使用者發現斷線的時機——他總是先敲個鍵試試看。
-    term.onData((d) => {
-      if (termSock && termSock.readyState === 1) termSock.send(d);
-      else connectTerm();
-    });
+  const t = { id: ++tabSeq, sock: null };
+  t.pane = document.createElement("div");
+  t.pane.className = "pane";
+  $("termPanes").appendChild(t.pane);
+
+  t.term = new xterm.Terminal({
+    fontSize: 12,
+    fontFamily: 'ui-monospace, Menlo, monospace',
+    cursorBlink: true,
+    theme: termTheme(),
+  });
+  t.fit = new xterm.FitAddon();
+  t.term.loadAddon(t.fit);
+  t.term.open(t.pane);
+
+  // 只綁一次。斷線之後任何輸入都當成「我要重連」，
+  // 因為那正是使用者發現斷線的時機——他總是先敲個鍵試試看。
+  t.term.onData((d) => {
+    if (t.sock && t.sock.readyState === 1) t.sock.send(d);
+    else connectTab(t);
+  });
+
+  // 分頁按鈕
+  t.btn = document.createElement("div");
+  t.btn.className = "tab";
+  t.btn.innerHTML = '<span></span><span class="x">✕</span>';
+  t.btn.firstChild.textContent = "shell " + t.id;
+  t.btn.onclick = (e) => {
+    if (e.target.classList.contains("x")) { closeTab(t); return; }
+    activateTab(t);
+  };
+  $("termTabs").appendChild(t.btn);
+
+  tabs.push(t);
+  activateTab(t);
+  connectTab(t);
+  return t;
+}
+
+function activateTab(t) {
+  actTab = t;
+  for (const x of tabs) {
+    x.pane.classList.toggle("on", x === t);
+    x.btn.classList.toggle("on", x === t);
   }
-  connectTerm();
+  setTimeout(() => { fitTab(t); t.term.focus(); }, 0);
+}
+
+function closeTab(t) {
+  dropSock(t);
+  try { t.term.dispose(); } catch (e) {}
+  t.pane.remove(); t.btn.remove();
+  tabs = tabs.filter((x) => x !== t);
+  if (!tabs.length) return toggleTerm();          // 關掉最後一個就收起面板
+  if (actTab === t) activateTab(tabs[tabs.length - 1]);
 }
 
 // 丟掉舊連線前先拔掉 handler。否則舊 socket 的 onclose 會在新連線建立之後
 // 才觸發，把「連線中斷」寫進一個其實剛連上的終端機。
-function dropSock() {
-  if (!termSock) return;
-  termSock.onopen = termSock.onmessage = termSock.onclose = termSock.onerror = null;
-  try { termSock.close(); } catch (e) {}
-  termSock = null;
+function dropSock(t) {
+  if (!t.sock) return;
+  t.sock.onopen = t.sock.onmessage = t.sock.onclose = t.sock.onerror = null;
+  try { t.sock.close(); } catch (e) {}
+  t.sock = null;
 }
 
 // pty 結束（打了 exit）、server 重啟、電腦睡醒，socket 都會關。
-// 之前這裡沒有重連，關掉面板再開也沒用——initTerm 開頭就早退了。
-function connectTerm() {
-  if (termSock && termSock.readyState <= 1) return;   // 連線中或已連上
-  dropSock();
+function connectTab(t) {
+  if (t.sock && t.sock.readyState <= 1) return;   // 連線中或已連上
+  dropSock(t);
 
   // 一定要 reset 而不是只送 \e[2J\e[H。清畫面不會清掉模式——
   // 舊 shell 開過的滑鼠追蹤與焦點回報還留著，xterm 會繼續把 ^[[<35;..M
   // 這類事件當輸入送給新 shell，新 shell 不認得就原樣回顯成一堆亂碼。
-  term.reset();
-  term.write("\x1b[90m連線中…\x1b[0m\r\n");
+  t.term.reset();
+  t.term.write("\x1b[90m連線中…\x1b[0m\r\n");
 
   const sock = new WebSocket("ws://" + location.host + "/term");
-  termSock = sock;
+  t.sock = sock;
   // 每個 handler 都確認自己還是「現役」那條連線，避免舊連線亂寫
-  sock.onopen = () => { if (termSock === sock) sendResize(); };
-  sock.onmessage = (e) => { if (termSock === sock) term.write(e.data); };
+  sock.onopen = () => { if (t.sock === sock) fitTab(t); };
+  sock.onmessage = (e) => { if (t.sock === sock) t.term.write(e.data); };
   sock.onclose = () => {
-    if (termSock !== sock) return;
-    term.write("\r\n\x1b[90m[連線中斷。按任意鍵重新連線]\x1b[0m\r\n");
+    if (t.sock !== sock) return;
+    t.term.write("\r\n\x1b[90m[連線中斷。按任意鍵重新連線]\x1b[0m\r\n");
   };
   sock.onerror = () => {};
 }
 
 // pty 要知道視窗多大，否則 vim、less 這類全螢幕程式會畫錯
-function sendResize() {
-  if (!fitAddon || !termSock || termSock.readyState !== 1) return;
-  fitAddon.fit();
-  termSock.send("\x00" + term.cols + "," + term.rows);
+function fitTab(t) {
+  if (!t) return;
+  try { t.fit.fit(); } catch (e) { return; }
+  if (t.sock && t.sock.readyState === 1) t.sock.send("\x00" + t.term.cols + "," + t.term.rows);
 }
 
 async function toggleTerm() {
@@ -1245,27 +1333,20 @@ async function toggleTerm() {
   localStorage.setItem("term", on ? "1" : "0");
   if (on) {
     $("termCwd").textContent = ST ? ST.file.replace(/\/[^/]+$/, "") : "";
-    try { await initTerm(); } catch (e) { return say(e.message, true); }
-    setTimeout(() => { sendResize(); term.focus(); }, 60);
+    if (!tabs.length) await newTab(); else activateTab(actTab || tabs[0]);
   }
   fit(); updPage();
 }
 $("termBtn").onclick = toggleTerm;
+$("termNew").onclick = (e) => { e.stopPropagation(); newTab(); };
 $("termClose").onclick = (e) => { e.stopPropagation(); toggleTerm(); };
-$("termRestart").onclick = (e) => {
-  e.stopPropagation();
-  if (!term) return;
-  dropSock();        // 拔掉 handler 再關，不必等 onclose，也就不必 setTimeout
-  connectTerm();
-  term.focus();
-};
 
 // 拖 termBar 調高度
 (function () {
   const bar = $("termBar");
   let on = false, veil = null;
   bar.addEventListener("mousedown", (e) => {
-    if (e.target.tagName === "BUTTON") return;
+    if (e.target.closest("button") || e.target.closest(".tab")) return;
     on = true;
     veil = document.createElement("div");
     veil.style.cssText = "position:fixed;inset:0;z-index:99999;cursor:ns-resize";
@@ -1281,11 +1362,11 @@ $("termRestart").onclick = (e) => {
     if (!on) return;
     on = false;
     if (veil) { veil.remove(); veil = null; }
-    sendResize(); fit(); updPage();
+    fitTab(actTab); fit(); updPage();
   });
 })();
 
-addEventListener("resize", () => { if (term) sendResize(); });
+addEventListener("resize", () => fitTab(actTab));
 if (localStorage.getItem("term") === "1") toggleTerm();
 
 load();
