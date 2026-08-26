@@ -287,8 +287,7 @@ function applyMode() {
   } else {
     $("err").classList.remove("show");
     // canvas 很吃記憶體，切回 HTML 就沒必要留著上一份 PDF 的每一頁
-    $("pdfBox").innerHTML = "";
-    pages = [];
+    teardownPdf();
   }
 }
 
@@ -412,11 +411,20 @@ async function getPdfjs() {
 
 const PDF_SCALE = 1.6;   // 渲染倍率。夠銳利又不會讓大論文吃掉太多記憶體
 let pages = [];          // 每頁的外框 div，捲動定位用
+let meta = [];           // 每頁的 PDF.js page 物件與尺寸
 let renderSeq = 0;       // 用序號而不是布林旗標：旗標卡住就再也畫不出來
+let pdfDoc = null;
 
-// 每一頁都先畫在還沒掛上 DOM 的 canvas 上，整份畫完才一次換掉。
-// 邊畫邊掛會出事：只要渲染中容器被清空，那個 canvas 的 render promise
-// 就永遠不 resolve，await 鏈整條卡死，連帶把整個分頁凍住。
+// 只畫看得到的頁。一份 55 頁的論文如果全部畫出來，55 個 canvas 在主執行緒
+// 連續渲染會讓整個分頁無回應超過 45 秒，位圖也吃掉約 260 MB——實測過，
+// 那不是慢，是整個凍住。
+//
+// 兩件事是踩過坑才定案的：
+//   1. 不預先持有所有 page 物件。先 getPage 全部、之後才 render 的話，
+//      render 的 promise 會永遠不 resolve 也不拋錯。要畫的時候才 getPage。
+//   2. 不用 IntersectionObserver。它在這個 flex 捲動容器裡對明顯可見的頁
+//      一次都沒觸發，查不出所以然；捲動事件自己算可見範圍，55 頁掃一輪
+//      成本可以忽略，而且行為完全可預測。
 async function renderPdf() {
   const seq = ++renderSeq;
   const box = $("pdfBox");
@@ -424,41 +432,122 @@ async function renderPdf() {
     const lib = await getPdfjs();
     // 每次都換 URL，否則改完重編會拿到瀏覽器快取的舊 PDF
     const doc = await lib.getDocument({ url: "/pdf?t=" + Date.now() }).promise;
-    if (seq !== renderSeq) return;   // 期間又編譯了一次，這份已經過時
+    if (seq !== renderSeq) return;
+
+    // 只問第一頁的尺寸來建等高佔位框。絕大多數論文每頁一樣大，
+    // 真的不一樣的那幾頁會在畫出來的時候把佔位框修正掉。
+    const first = await doc.getPage(1);
+    const vp0 = first.getViewport({ scale: PDF_SCALE });
+    if (seq !== renderSeq) return;
 
     const keep = $("stage").scrollTop;   // 重編後留在原處，不要每次都彈回第一頁
     const frag = document.createDocumentFragment();
-    const next = [];
+    const next = [], metas = [];
 
     for (let n = 1; n <= doc.numPages; n++) {
-      if (seq !== renderSeq) return;
-      const page = await doc.getPage(n);
-      const vp = page.getViewport({ scale: PDF_SCALE });
       const wrap = document.createElement("div");
       wrap.className = "pg";
-      wrap.style.width = vp.width + "px";
-      wrap.style.height = vp.height + "px";
-      const cv = document.createElement("canvas");
-      cv.width = vp.width; cv.height = vp.height;
-      cv.dataset.page = n;
-      await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
-      wrap.appendChild(cv);
+      wrap.style.width = vp0.width + "px";
+      wrap.style.height = vp0.height + "px";
       frag.appendChild(wrap);
       next.push(wrap);
+      metas.push({ n, wrap, canvas: null, busy: false, seq });
     }
 
-    if (seq !== renderSeq) return;
-    box.innerHTML = "";
+    teardownPdf();
+    pdfDoc = doc;
     box.appendChild(frag);
     pages = next;
+    meta = metas;
     $("stage").scrollTop = Math.min(keep, $("stage").scrollHeight);
+
+    // 同步更新一次：pages 此刻確定是新的。只排 rAF 的話會有競態——
+    // renderPdf 會跑兩次（載入 + 編譯完成），第一次排的 rAF 可能落在
+    // 第二次 teardownPdf() 清空之後、重新賦值之前，那次就白跑了。
     updPage();
+    // 再等佈局跑完補一次：剛 appendChild 時 stage.clientHeight 可能還是 0
+    requestAnimationFrame(() => { updPage(); });
   } catch (e) {
     if (seq !== renderSeq) return;
-    box.innerHTML = "";
-    pages = [];
+    teardownPdf();
     say("PDF 顯示失敗：" + e.message, true);
   }
+}
+
+function teardownPdf() {
+  for (const m of meta) dropPage(m);
+  meta = []; pages = [];
+  $("pdfBox").innerHTML = "";
+  // 刻意不呼叫 pdfDoc.destroy()：destroy 之後那份文件的 page 再 render
+  // 會永遠不 resolve 也不拋錯，任何還在飛的 paintPage 就永久掛住。
+  pdfDoc = null;
+}
+
+// 上下各留一屏的緩衝，捲動時才不會看到空白框才開始畫
+function updateVisiblePages() {
+  if (!isTex() || !meta.length) return;
+  const st = $("stage");
+  // 下限保護：佈局未完成時 clientHeight 會是 0，沒有這個保護就什麼都不會畫
+  const view = Math.max(st.clientHeight, 400);
+  const pad = view;
+  const top = st.scrollTop - pad, bot = st.scrollTop + view + pad;
+  for (const m of meta) {
+    const y0 = m.wrap.offsetTop, y1 = y0 + m.wrap.offsetHeight;
+    if (y1 > top && y0 < bot) paintPage(m); else dropPage(m);
+  }
+}
+
+// 一次只畫一頁。並行發起多個 render 時 PDF.js 會卡住——promise 不 resolve
+// 也不拋錯，busy 就永久卡在 true，那一頁之後再也不會被畫。
+// PDF.js 官方 viewer 自己也有 renderingQueue，同樣是序列化。
+let paintQueue = Promise.resolve();
+
+function paintPage(m) {
+  if (m.canvas || m.busy || m.seq !== renderSeq || !pdfDoc) return;
+  m.busy = true;
+  paintQueue = paintQueue.then(() => doPaint(m)).catch(() => {});
+}
+
+async function doPaint(m) {
+  try {
+    if (m.canvas || m.seq !== renderSeq || !pdfDoc) return;
+    const page = await pdfDoc.getPage(m.n);
+    if (m.seq !== renderSeq) return;
+    const vp = page.getViewport({ scale: PDF_SCALE });
+    const cv = document.createElement("canvas");
+    cv.width = vp.width; cv.height = vp.height;
+    cv.dataset.page = m.n;
+
+    const task = page.render({ canvasContext: cv.getContext("2d"), viewport: vp });
+    // 逾時就放棄這一頁。沒有這道防線的話，一次卡住會讓整個佇列停擺。
+    await Promise.race([
+      task.promise,
+      new Promise((_, bad) => setTimeout(() => bad(new Error("render timeout")), 15000)),
+    ]).catch((e) => { try { task.cancel(); } catch (_) {} throw e; });
+
+    // 畫完才掛上去：掛著畫的話，容器一旦被清空 promise 就永遠不 resolve
+    if (m.seq === renderSeq && m.wrap.isConnected) {
+      // 這一頁尺寸跟第一頁不同（橫式頁、插圖頁）就修正佔位框
+      if (Math.abs(m.wrap.offsetHeight - vp.height) > 1) {
+        m.wrap.style.width = vp.width + "px";
+        m.wrap.style.height = vp.height + "px";
+      }
+      m.wrap.appendChild(cv);
+      m.canvas = cv;
+    }
+  } catch (e) {
+    /* 取消、換檔或逾時，畫到一半不算錯 */
+  } finally {
+    m.busy = false;   // 一定要還原，否則這一頁永久畫不出來
+  }
+}
+
+// 把寬高設成 0 才會真的釋放位圖，只 remove() 元素記憶體還留著
+function dropPage(m) {
+  if (!m || !m.canvas) return;
+  m.canvas.width = 0; m.canvas.height = 0;
+  m.canvas.remove();
+  m.canvas = null;
 }
 
 function scrollToPage(n) {
@@ -631,6 +720,9 @@ function updPage() {
   for (let i = 0; i < list.length; i++) if (list[i].offsetTop * k <= top + 40) n = i;
   $("pgNow").textContent = n + 1 + " / " + list.length;
   $("pgNow").dataset.n = n;
+  // 掛在這裡，捲動 / 拖分隔線 / 只看預覽 / 視窗縮放就全部涵蓋，
+  // 不必在每個改變視野的地方各補一次
+  updateVisiblePages();
 }
 function goPage(n) {
   const list = pageList();
