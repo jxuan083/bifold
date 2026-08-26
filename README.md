@@ -93,8 +93,16 @@ PDF 由 PDF.js 畫在 canvas 上，不是交給瀏覽器內建的 viewer。這�
 
 只畫看得到的頁，其餘留等高佔位框，捲到才補、離開就把位圖釋放。55 頁的論文實測常駐 2–3 頁、約 14 MB；整份畫出來的話是 260 MB，而且會讓分頁無回應超過 45 秒。
 
-## 已知限制
+## 語法高亮
 
-編輯器沒有語法高亮，底層是純 `textarea`。
+疊層做的：textarea 文字透明、游標和選取保留，底下那層 `<pre>` 畫上色後的同一份內容，兩層的 font / padding / white-space / tab-size 逐項對齊。
+
+**不換成 CodeMirror 是刻意的。** `gotoLine`、搜尋、拖曳寫回 inline style、跟隨游標算行號，全都依賴 textarea 的 `selectionStart` / `setSelectionRange`——換掉等於把編輯器重寫一遍。疊層只加視覺，既有行為一行都不用動。
+
+tokenizer 自己寫，沒引 Prism：只需要 LaTeX、HTML、CSS 三種，沒必要為此拖進一個支援兩百種語言的套件。`<style>` 區塊會交給 CSS tokenizer——簡報的樣式往往佔掉整份檔案一大半，不上色等於只做一半。
+
+實測 62KB 的簡報 tokenize 18ms、137KB 的 LaTeX 32ms，配合 90ms debounce 打字不會頓。超過 400KB 就不上色，寧可沒有也不要卡。
+
+## 已知限制
 
 反向同步的精度受限於 SyncTeX 的粒度：整個段落標在 `\par` 的位置，所以點段落裡任何一句都會跳到該段最後一行。章節標題與獨立段落則是精準的。點擊後閃現的框就是實際命中的範圍——框住整段代表這段只能對到一行，不是點歪了。

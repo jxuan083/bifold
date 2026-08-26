@@ -62,9 +62,14 @@ Overleaf 是自動存的，這裡刻意不是。原本 HTML 模式的契約就�
 
 **選檔一定要走原生對話框**。瀏覽器的 `<input type="file">` 只給你檔案內容，不給絕對路徑，而這個工具的整個前提就是讀寫硬碟上的真實檔案。走 `osascript` 叫 Finder 反而體驗更好。
 
+## 語法高亮為什麼用疊層不用 CodeMirror
+
+現有程式碼大量依賴 textarea 的 `selectionStart` / `setSelectionRange`：`gotoLine`、搜尋、`writeStyle` 寫回 inline style、跟隨游標算行號。換成 CodeMirror 等於把編輯器整個重寫，而疊層只加視覺，既有行為完全不動。
+
+代價是兩層的度量必須逐項一致（font / padding / white-space / tab-size），差一點游標就會跟文字錯開。已驗過 scrollHeight、scrollWidth、中文混排都對齊。
+
 ## 待辦
 
-- 編輯器沒有語法高亮，底層是純 textarea。這是對標 Overleaf 剩下最明顯的差距
 - `.bib` 改動不會觸發重編——目前只有存 `.tex` 才編譯
 - 檔案樹只能看和切換，不能新增、改名、刪除
 - 終端機只有一個分頁，重連等於開一個全新的 shell（狀態不保留）

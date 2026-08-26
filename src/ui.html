@@ -85,10 +85,26 @@
   #gut{width:52px;padding:10px 8px 10px 0;text-align:right;background:var(--bar);color:var(--gutfg);
        border-right:1px solid var(--edge);overflow:hidden;user-select:none;
        font:11.5px/1.55 ui-monospace,Menlo,monospace;white-space:pre}
-  #code{flex:1;padding:10px 12px;border:0;outline:0;resize:none;white-space:pre;overflow:auto;
-        background:var(--panel);color:var(--fg);
-        font:11.5px/1.55 ui-monospace,Menlo,monospace;tab-size:2}
+  /* 語法高亮用疊層做，不換掉 textarea。gotoLine、搜尋、拖曳寫回 inline style、
+     跟隨游標算行號全都依賴 selectionStart / setSelectionRange——換成 CodeMirror
+     等於把編輯器重寫一遍。疊層只加視覺，既有行為一行都不用動。
+     兩層的 font / padding / white-space / tab-size 必須逐項一致，差一點就會錯開。 */
+  #codewrap{flex:1;position:relative;overflow:hidden}
+  #code,#syn{position:absolute;inset:0;margin:0;padding:10px 12px;border:0;
+            white-space:pre;overflow:auto;
+            font:11.5px/1.55 ui-monospace,Menlo,monospace;tab-size:2}
+  #syn{pointer-events:none;color:var(--fg);background:var(--panel)}
+  #code{outline:0;resize:none;background:transparent;
+        color:transparent;caret-color:var(--fg)}
   #code::selection{background:var(--sel)}
+  /* VS Code Dark Modern / Light+ 的實際色值 */
+  :root{--t-kw:#0000ff;--t-str:#a31515;--t-cm:#008000;--t-tag:#800000;
+        --t-attr:#e50000;--t-math:#0070c1;--t-brace:#7c4dff}
+  :root[data-t="dark"]{--t-kw:#569cd6;--t-str:#ce9178;--t-cm:#6a9955;--t-tag:#569cd6;
+        --t-attr:#9cdcfe;--t-math:#4ec9b0;--t-brace:#c586c0}
+  #syn .kw{color:var(--t-kw)} #syn .str{color:var(--t-str)} #syn .cm{color:var(--t-cm);font-style:italic}
+  #syn .tag{color:var(--t-tag)} #syn .attr{color:var(--t-attr)} #syn .math{color:var(--t-math)}
+  #syn .brace{color:var(--t-brace)}
   #props{display:none;border-top:1px solid var(--line);background:var(--bar);padding:8px 10px;
          max-height:190px;overflow:auto}
   #props.show{display:block}
@@ -155,7 +171,7 @@
     </div>
     <div id="ed">
       <div id="gut"></div>
-      <textarea id="code" spellcheck="false" wrap="off"></textarea>
+      <div id="codewrap"><pre id="syn"></pre><textarea id="code" spellcheck="false" wrap="off"></textarea></div>
     </div>
     <div id="props">
       <div class="hd"><b id="pTag">—</b><span id="pLine"></span>
@@ -230,8 +246,136 @@ function drawGutter() {
   for (let i = 1; i <= n; i++) s += i + "\n";
   gut.textContent = s;
   gut.scrollTop = code.scrollTop;
+  // 內容變動的路徑（輸入、載入、復原、拖曳寫回）都會經過這裡，掛一次就全涵蓋
+  schedSyntax();
 }
-code.addEventListener("scroll", () => (gut.scrollTop = code.scrollTop));
+// ── 語法高亮 ────────────────────────────────────
+// 疊層方案：textarea 文字透明、游標和選取保留，底下那層 <pre> 畫上色後的同一份內容。
+// 自己寫 tokenizer 而不是引 Prism——只需要 LaTeX 和 HTML 兩種，
+// 沒必要為此拖進一個支援兩百種語言的套件。
+const ESC = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// LaTeX：註解 → 數學 → 控制序列 → 大括號。順序有意義，
+// 註解要最先吃掉，否則 % 後面的東西會被當成真的指令上色。
+function hlTex(src) {
+  let out = "", i = 0;
+  const push = (cls, txt) => (out += cls ? `<span class="${cls}">${ESC(txt)}</span>` : ESC(txt));
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "%" && src[i - 1] !== "\\") {          // 註解到行尾
+      const e = src.indexOf("\n", i); const end = e < 0 ? src.length : e;
+      push("cm", src.slice(i, end)); i = end; continue;
+    }
+    if (c === "$") {                                  // $...$ / $$...$$
+      const dbl = src[i + 1] === "$";
+      const mark = dbl ? "$$" : "$";
+      const e = src.indexOf(mark, i + mark.length);
+      const end = e < 0 ? src.length : e + mark.length;
+      push("math", src.slice(i, end)); i = end; continue;
+    }
+    if (c === "\\") {                                 // \command 或 \{ 這種跳脫
+      const m = /^\\([a-zA-Z@]+\*?|.)/.exec(src.slice(i));
+      const tok = m ? m[0] : c;
+      push("kw", tok); i += tok.length; continue;
+    }
+    if (c === "{" || c === "}" || c === "[" || c === "]") { push("brace", c); i++; continue; }
+    // 一般文字：一次吃到下一個有意義的字元，避免逐字產生 span
+    const nx = src.slice(i + 1).search(/[%$\\{}\[\]]/);
+    const end = nx < 0 ? src.length : i + 1 + nx;
+    push(null, src.slice(i, end)); i = end;
+  }
+  return out;
+}
+
+// CSS：簡報的 <style> 往往佔掉整份檔案一大半，不上色等於只做一半。
+function hlCss(src) {
+  let out = "", i = 0;
+  const push = (cls, txt) => (out += cls ? `<span class="${cls}">${ESC(txt)}</span>` : ESC(txt));
+  while (i < src.length) {
+    if (src.startsWith("/*", i)) {
+      const e = src.indexOf("*/", i); const end = e < 0 ? src.length : e + 2;
+      push("cm", src.slice(i, end)); i = end; continue;
+    }
+    if (src[i] === '"' || src[i] === "'") {
+      const q = src[i]; const e = src.indexOf(q, i + 1);
+      const end = e < 0 ? src.length : e + 1;
+      push("str", src.slice(i, end)); i = end; continue;
+    }
+    // 屬性名：行首（可含空白）到冒號，--var 也算
+    const m = /^([ \t]*)(--[\w-]+|[a-zA-Z-]+)(?=\s*:)/.exec(src.slice(i));
+    if (m && (i === 0 || src[i - 1] === "\n" || src[i - 1] === ";" || src[i - 1] === "{")) {
+      push(null, m[1]); push("attr", m[2]); i += m[0].length; continue;
+    }
+    if (src[i] === "{" || src[i] === "}") { push("brace", src[i]); i++; continue; }
+    if (src[i] === "#") {                      // 色碼 #fff / #1B2430
+      const mm = /^#[0-9a-fA-F]{3,8}\b/.exec(src.slice(i));
+      if (mm) { push("str", mm[0]); i += mm[0].length; continue; }
+    }
+    const nx = src.slice(i + 1).search(/[/"'{}#\n]/);
+    const end = nx < 0 ? src.length : i + 1 + nx;
+    push(null, src.slice(i, end)); i = end;
+  }
+  return out;
+}
+
+// HTML：註解 → 標籤（含屬性名與字串）→ 文字
+function hlHtml(src) {
+  let out = "", i = 0;
+  const push = (cls, txt) => (out += cls ? `<span class="${cls}">${ESC(txt)}</span>` : ESC(txt));
+  while (i < src.length) {
+    if (src.startsWith("<!--", i)) {
+      const e = src.indexOf("-->", i); const end = e < 0 ? src.length : e + 3;
+      push("cm", src.slice(i, end)); i = end; continue;
+    }
+    if (src[i] === "<") {
+      const e = src.indexOf(">", i); const end = e < 0 ? src.length : e + 1;
+      const tag = src.slice(i, end);
+      // <style> 的內容交給 CSS tokenizer。<script> 不特別處理——
+      // 這個工具編的是簡報和論文，裡面的 JS 通常只有幾行。
+      if (/^<style\b/i.test(tag)) {
+        const close = src.toLowerCase().indexOf("</style", end);
+        const cEnd = close < 0 ? src.length : close;
+        out += `<span class="tag">${ESC(tag)}</span>`;
+        out += hlCss(src.slice(end, cEnd));
+        i = cEnd; continue;
+      }
+      // 標籤內部再拆：屬性字串一種色、其餘算標籤色
+      let last = 0, inner = "";
+      tag.replace(/("[^"]*"|'[^']*')/g, (mm, _q, off) => {
+        inner += `<span class="tag">${ESC(tag.slice(last, off))}</span>`;
+        inner += `<span class="str">${ESC(mm)}</span>`;
+        last = off + mm.length; return mm;
+      });
+      inner += `<span class="tag">${ESC(tag.slice(last))}</span>`;
+      out += inner; i = end; continue;
+    }
+    const nx = src.indexOf("<", i);
+    const end = nx < 0 ? src.length : nx;
+    push(null, src.slice(i, end)); i = end;
+  }
+  return out;
+}
+
+// 大檔案不值得為了顏色卡住打字。超過門檻就不上色，寧可沒有也不要頓。
+const HL_MAX = 400000;
+let hlTimer = 0;
+function paintSyntax() {
+  const el = $("syn");
+  const src = code.value;
+  if (src.length > HL_MAX) { el.textContent = src; return; }
+  const tex = ST && ST.kind === "tex";
+  // 結尾補一個換行，否則最後一行是空行時兩層高度會差一行
+  el.innerHTML = (tex ? hlTex(src) : hlHtml(src)) + "\n";
+  el.scrollTop = code.scrollTop;
+  el.scrollLeft = code.scrollLeft;
+}
+const schedSyntax = () => { clearTimeout(hlTimer); hlTimer = setTimeout(paintSyntax, 90); };
+
+code.addEventListener("scroll", () => {
+  gut.scrollTop = code.scrollTop;
+  $("syn").scrollTop = code.scrollTop;
+  $("syn").scrollLeft = code.scrollLeft;
+});
 
 // ── 復原 / 重做 ──────────────────────────────────
 // 程式化改 code.value（拖曳寫回）會清掉瀏覽器原生的 undo 記錄，所以自己維護一份。
