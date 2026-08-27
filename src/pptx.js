@@ -26,20 +26,55 @@ function check() {
   if (!fs.existsSync(CHROME)) throw new Error("找不到 Google Chrome，PDF 這步需要它");
 }
 
+// 從 CSS 裡找出一頁多大。找 .slide / .page / section 這類規則裡成對的 width/height。
+function slideSize(src) {
+  const rules = src.match(/\.(slide|page|deck-page|sheet)\s*\{[^}]*\}/gi) || [];
+    for (const r of rules) {
+    const w = /width\s*:\s*(\d+(?:\.\d+)?)px/i.exec(r);
+    const h = /height\s*:\s*(\d+(?:\.\d+)?)px/i.exec(r);
+    if (w && h) return { w: +w[1], h: +h[1] };
+  }
+  return { w: 1600, h: 900 };   // 16:9，最常見
+}
+
+// Chrome 的 --print-to-pdf 沒辦法從命令列指定紙張尺寸，它只看 CSS 的 @page。
+// 所以沒寫 @page 的檔案會被印成預設的 Letter 直式——1600x900 的橫式 slide
+// 塞進直式紙張，出來的東西沒法看。
+//
+// 與其要求每個 HTML 都記得寫 @page，不如建置時自己補上。暫存檔放在同一個
+// 目錄（隱藏檔名），相對路徑的圖片和字型才拿得到。
+function preparePrintable(htmlFile) {
+  const src = fs.readFileSync(htmlFile, "utf8");
+  if (/@page\s*\{[^}]*size\s*:/i.test(src)) return { file: htmlFile, temp: null, size: slideSize(src) };
+
+  const size = slideSize(src);
+  const css = `<style>@page{size:${size.w}px ${size.h}px;margin:0}</style>`;
+  const out = /<\/head>/i.test(src)
+    ? src.replace(/<\/head>/i, css + "\n</head>")
+    : css + "\n" + src;
+
+  const temp = path.join(path.dirname(htmlFile),
+    "." + path.basename(htmlFile).replace(/\.html?$/i, "") + ".bifold-print.html");
+  fs.writeFileSync(temp, out, "utf8");
+  return { file: temp, temp, size };
+}
+
 // html 檔的絕對路徑 → 同目錄的同名 .pptx
 async function build(htmlFile, log = () => {}) {
   check();
   const outPptx = htmlFile.replace(/\.html?$/i, "") + ".pptx";
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "bifold-pptx-"));
   const pdf = path.join(work, "deck.pdf");
+  const prep = preparePrintable(htmlFile);
 
   try {
-    log("[1/3] 由 HTML 產生 PDF");
+    log("[1/3] 由 HTML 產生 PDF（頁面 " + prep.size.w + "x" + prep.size.h + "px"
+        + (prep.temp ? "，已補上 @page" : "") + "）");
     // 用 file:// 讀硬碟上的檔案，所以要先存檔。相對路徑的圖片字型才拿得到。
     await run(CHROME, [
       "--headless", "--disable-gpu", "--no-sandbox",
       "--print-to-pdf-no-header", "--print-to-pdf=" + pdf,
-      "file://" + encodeURI(htmlFile).replace(/#/g, "%23"),
+      "file://" + encodeURI(prep.file).replace(/#/g, "%23"),
     ]);
     if (!fs.existsSync(pdf)) throw new Error("Chrome 沒有產生 PDF");
 
@@ -62,6 +97,7 @@ async function build(htmlFile, log = () => {}) {
     return { pptx: outPptx, pages: shots.length };
   } finally {
     try { fs.rmSync(work, { recursive: true, force: true }); } catch (e) {}
+    if (prep.temp) { try { fs.unlinkSync(prep.temp); } catch (e) {} }
   }
 }
 
