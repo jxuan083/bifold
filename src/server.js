@@ -257,8 +257,13 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
   if (!cur) return send(res, 404, "text/plain", "尚未開啟任何檔案");
 
   // 原始碼讀寫
-  if (p === "/file" && req.method === "GET")
+  // GET /file 代表「重新從硬碟載入」——前端只有 load() 會呼叫。
+  // 這時草稿必須作廢，否則編輯器顯示硬碟版、預覽還在渲染舊草稿，
+  // 兩邊分岔。這個工具的整個前提就是只有一份來源。
+  if (p === "/file" && req.method === "GET") {
+    draft = null;
     return send(res, 200, "text/plain; charset=utf-8", fs.readFileSync(cur.file, "utf8"));
+  }
   if (p === "/file" && req.method === "POST") {
     const body = await readBody(req);
     fs.writeFileSync(cur.file, body, "utf8");
