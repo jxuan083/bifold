@@ -178,6 +178,11 @@
       document.body.style.cursor = "";
       if (!on) hideAll();
     }
+    // 點麵包屑指名選某一層
+    if (d.type === "selectIdx") {
+      var t = document.querySelector('[data-i="' + d.i + '"]');
+      if (t) { last = t; geo = null; draw(t); emitGoto(t); }
+    }
     // 屬性面板即時套用（功能二）
     if (d.type === "apply" && d.i != null) {
       var el = document.querySelector('[data-i="' + d.i + '"]');
@@ -236,12 +241,28 @@
 
   addEventListener("scroll", function () { if (on && last && !drag) draw(last); }, true);
 
-  addEventListener("click", function (e) {
-    if (!on) return;
-    if (moved) { moved = false; e.preventDefault(); e.stopPropagation(); return; } // 拖完不要順便跳行
-    var el = hit(e.target);
-    if (!el) return;
-    e.preventDefault(); e.stopPropagation();
+  var cls1 = function (el) {
+    return typeof el.className === "string" ? el.className.trim() : "";
+  };
+
+  // 祖先鏈。點下去選到的是最內層那個元素，但要講「在這個裡面均分」時，
+  // 指的通常是裝著它們的容器——沒有這條鏈就選不到上層。
+  function chainOf(el) {
+    var out = [];
+    for (var p = el; p; p = p.parentElement) {
+      if (!p.dataset || !p.dataset.l) continue;
+      out.unshift({
+        i: +p.dataset.i, l: +p.dataset.l,
+        tag: p.tagName.toLowerCase(),
+        cls: (cls1(p).split(/\s+/)[0] || ""),
+        kids: p.children.length
+      });
+      if (out.length >= 8) break;
+    }
+    return out;
+  }
+
+  function emitGoto(el) {
     var cs = getComputedStyle(el);
     var pick = {};
     ["fontSize", "fontWeight", "lineHeight", "letterSpacing", "color",
@@ -250,9 +271,20 @@
      "gap", "width", "borderRadius"].forEach(function (k) { pick[k] = cs[k]; });
     parent.postMessage({ type: "goto", line: +el.dataset.l, i: +el.dataset.i,
       tag: el.tagName.toLowerCase(),
-      cls: typeof el.className === "string" ? el.className.trim() : "",
+      cls: cls1(el),
       inline: el.getAttribute("style") || "",
       css: pick,
+      chain: chainOf(el),
+      kids: el.children.length,
       text: (el.textContent || "").trim().slice(0, 50) }, "*");
+  }
+
+  addEventListener("click", function (e) {
+    if (!on) return;
+    if (moved) { moved = false; e.preventDefault(); e.stopPropagation(); return; } // 拖完不要順便跳行
+    var el = hit(e.target);
+    if (!el) return;
+    e.preventDefault(); e.stopPropagation();
+    emitGoto(el);
   }, true);
 })();

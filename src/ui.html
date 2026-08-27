@@ -9,12 +9,14 @@
     --fg:#1b2733; --dim:#5b6b7d; --bar:#f7f9fb; --panel:#fff; --line:#dfe5ec;
     --edge:#eef2f7; --gutfg:#9aa8b8; --btn:#fff; --btnhov:#eef2f7; --accent:#173A6B;
     --onaccent:#fff; --sel:#cfe3ff; --stage:#eef1f5; --shadow:rgba(0,0,0,.12); --err:#c0392b;
+    --selbg:rgba(0,120,212,.22);
   }
   /* VS Code Dark Modern 的實際色值。預覽區永遠白底，那是簡報本身，變色就看不到真實成品 */
   :root[data-t="dark"]{
     --fg:#cccccc; --dim:#9d9d9d; --bar:#181818; --panel:#1f1f1f; --line:#2b2b2b;
     --edge:#2b2b2b; --gutfg:#6e7681; --btn:#313131; --btnhov:#3c3c3c; --accent:#0078d4;
     --onaccent:#fff; --sel:#264f78; --stage:#141414; --shadow:rgba(0,0,0,.6); --err:#f14c4c;
+    --selbg:rgba(88,150,220,.32);
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;font:13px/1.5 -apple-system,"PingFang TC",sans-serif;
@@ -113,7 +115,9 @@
   #syn{pointer-events:none;color:var(--fg);background:var(--panel)}
   #code{outline:0;resize:none;background:transparent;
         color:transparent;caret-color:var(--fg)}
-  #code::selection{background:var(--sel)}
+  /* textarea 的字是透明的（字由底下那層畫），所以選取背景一定要半透明，
+     不然選起來就是一塊看不到內容的實心色塊 */
+  #code::selection{background:var(--selbg)}
   /* VS Code Dark Modern / Light+ 的實際色值 */
   :root{--t-kw:#0000ff;--t-str:#a31515;--t-cm:#008000;--t-tag:#800000;
         --t-attr:#e50000;--t-math:#0070c1;--t-brace:#7c4dff}
@@ -127,6 +131,14 @@
   #props.show{display:block}
   #props .hd{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim);margin-bottom:7px}
   #props .hd b{color:var(--accent);font:700 11.5px ui-monospace,Menlo,monospace}
+  /* 祖先路徑：點下去選到的是最內層，但要說「在這個裡面均分」時
+     指的是容器。比照 DevTools 給一條可點的麵包屑。 */
+  #pCrumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;margin-bottom:6px}
+  #pCrumb .c{padding:1px 6px;border:1px solid var(--line);border-radius:4px;cursor:pointer;
+             font:11px ui-monospace,Menlo,monospace;color:var(--dim);white-space:nowrap}
+  #pCrumb .c:hover{background:var(--btnhov);color:var(--fg)}
+  #pCrumb .c.on{background:var(--accent);border-color:var(--accent);color:var(--onaccent)}
+  #pCrumb .sep{color:var(--gutfg);font-size:10px}
   #props .row{display:grid;grid-template-columns:88px 1fr;gap:6px;align-items:center;margin-bottom:4px}
   #props label{font-size:11.5px;color:var(--dim);cursor:ew-resize;user-select:none;
                font-family:ui-monospace,Menlo,monospace}
@@ -171,6 +183,7 @@
   <button id="build">建置 PPTX</button>
   <button id="dl">下載檔案</button>
   <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨游標</button>
+  <button id="ref" title="把選取的位置送進終端機 ⌘⇧E">引用位置</button>
   <button id="termBtn" title="終端機 ⌃`">終端機</button>
   <span id="msg">載入中…</span>
 </div>
@@ -192,6 +205,7 @@
       <div id="codewrap"><pre id="syn"></pre><textarea id="code" spellcheck="false" wrap="off"></textarea></div>
     </div>
     <div id="props">
+      <div id="pCrumb"></div>
       <div class="hd"><b id="pTag">—</b><span id="pLine"></span>
         <span style="margin-left:auto">拖標籤名可調數值</span></div>
       <div id="pRows"></div>
@@ -1086,6 +1100,24 @@ let sel = null;
 function showProps(d) {
   sel = d;
   $("props").classList.add("show");
+
+  // 祖先路徑。最後一個是目前選中的，點前面任一層就選那層。
+  const bc = $("pCrumb");
+  bc.innerHTML = "";
+  const chain = d.chain || [];
+  chain.forEach((c, idx) => {
+    if (idx) {
+      const sp = document.createElement("span");
+      sp.className = "sep"; sp.textContent = "›";
+      bc.appendChild(sp);
+    }
+    const b = document.createElement("span");
+    b.className = "c" + (idx === chain.length - 1 ? " on" : "");
+    b.textContent = c.tag + (c.cls ? "." + c.cls : "") + (c.kids ? " (" + c.kids + ")" : "");
+    b.title = "第 " + c.l + " 行" + (c.kids ? "，" + c.kids + " 個子元素" : "");
+    b.onclick = () => pv.contentWindow.postMessage({ type: "selectIdx", i: c.i }, "*");
+    bc.appendChild(b);
+  });
   $("pTag").textContent = "<" + d.tag + (d.cls ? " class=\"" + d.cls + "\"" : "") + ">";
   $("pLine").textContent = "第 " + d.line + " 行";
   const rows = $("pRows");
@@ -1200,6 +1232,9 @@ addEventListener("keydown", (e) => {
   // 兩種模式下語意一致：把左右兩邊對起來。
   // HTML 是「點畫面找程式碼」的選取模式，.tex 是「從游標跳到 PDF 對應頁」。
   // 不用 DevTools 慣例的 ⌘⇧C，那個會被 Chrome 自己攔走，網頁收不到。
+  if (mod && e.shiftKey && (e.key === "E" || e.key === "e")) {
+    e.preventDefault(); sendRef(); return;
+  }
   if (mod && e.key === "e") {
     e.preventDefault();
     if (isTex()) syncToCursor(true); else $("pick").click();
@@ -1350,6 +1385,44 @@ async function toggleTerm() {
   }
   fit(); updPage();
 }
+// 把「我指的是這裡」送進終端機。刻意只送位置不送整段內容——
+// claude 有 Read/Edit，給它檔案和行號它自己會去讀，塞整段進 prompt
+// 既浪費又容易和真實檔案不同步。格式比照 ripgrep 的 檔名:行號，
+// AI 和人都一眼看得懂。
+function refText() {
+  const rel = ST.file.split("/").pop();
+  const lineOf = (pos) => code.value.slice(0, pos).split("\n").length;
+  const a = lineOf(code.selectionStart);
+  const b = code.selectionStart === code.selectionEnd ? a : lineOf(code.selectionEnd);
+  const loc = a === b ? `${rel}:${a}` : `${rel}:${a}-${b}`;
+
+  // 選取模式選中的元素：附上 tag 與子元素數，AI 才知道「這個裡面」裝了什麼。
+  // 只在選取範圍正好是該元素那一行時才附——不然你後來自己選了別段，
+  // 還掛著上一次點的元素資訊就會指錯。
+  if (sel && !isTex() && a === sel.line && b === sel.line) {
+    const tag = sel.tag + (sel.cls ? "." + sel.cls.split(/\s+/)[0] : "");
+    return `${loc} <${tag}>` + (sel.kids ? ` ${sel.kids}個子元素` : "");
+  }
+  return loc;
+}
+
+async function sendRef() {
+  if (!ST) return;
+  if (!$("termWrap").classList.contains("show")) await toggleTerm();
+  if (!actTab) await newTab();
+  // 等連線起來再送，否則字會掉
+  for (let i = 0; i < 40 && (!actTab.sock || actTab.sock.readyState !== 1); i++)
+    await new Promise((r) => setTimeout(r, 100));
+  if (!actTab.sock || actTab.sock.readyState !== 1) return say("終端機還沒連上", true);
+
+  const t = refText();
+  // 不送換行：送出去只是把文字打進去，要不要執行由你決定
+  actTab.sock.send(t + " ");
+  actTab.term.focus();
+  say("已送進終端機：" + t);
+}
+$("ref").onclick = sendRef;
+
 $("termBtn").onclick = toggleTerm;
 $("termNew").onclick = (e) => { e.stopPropagation(); newTab(); };
 $("termClose").onclick = (e) => { e.stopPropagation(); toggleTerm(); };
