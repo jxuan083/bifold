@@ -306,6 +306,43 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
     return json(res, 200, { self, latest });
   }
 
+  // 三方合併。二選一不是答案——AI 改了 A 段、你改了 B 段，兩邊都該留。
+  //
+  // 不自己寫 diff3：git merge-file 就是幹這個的，而且不需要在 repo 裡也能用。
+  // base 是「你載入檔案那一刻的內容」，前端記著送過來；theirs 直接讀硬碟。
+  // exit code 就是衝突數，0 代表乾淨合併。
+  if (p === "/merge" && req.method === "POST") {
+    let payload;
+    try { payload = JSON.parse(await readBody(req)); }
+    catch (e) { return json(res, 200, { ok: false, error: "壞掉的請求" }); }
+
+    const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "bifold-merge-"));
+    const f = (n, c) => { const p2 = path.join(dir, n); fs.writeFileSync(p2, c, "utf8"); return p2; };
+    let theirs = "";
+    try { theirs = fs.readFileSync(cur.file, "utf8"); } catch (e) {}
+
+    const pMine = f("mine", payload.mine || "");
+    const pBase = f("base", payload.base || "");
+    const pTheirs = f("theirs", theirs);
+
+    return execFile("git",
+      ["merge-file", "-p", "--diff3",
+       "-L", "編輯器裡的（你改的）", "-L", "共同祖先", "-L", "硬碟上的（外部改的）",
+       pMine, pBase, pTheirs],
+      { maxBuffer: 32 * 1024 * 1024 },
+      (err, stdout) => {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+        // git merge-file 用 exit code 回報衝突數，那不是執行失敗
+        const conflicts = err && typeof err.code === "number" && err.code > 0 ? err.code : 0;
+        if (err && typeof err.code !== "number") {
+          return json(res, 200, { ok: false, error: "合併失敗：" + err.message });
+        }
+        let mtime = 0;
+        try { mtime = fs.statSync(cur.file).mtimeMs; } catch (e) {}
+        json(res, 200, { ok: true, merged: stdout, conflicts, mtime });
+      });
+  }
+
   // 還沒存檔的內容，只放記憶體
   if (p === "/draft" && req.method === "POST") {
     draft = { file: cur.file, content: await readBody(req) };

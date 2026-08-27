@@ -537,6 +537,7 @@ async function load() {
   $("build").disabled = !ST.hasBuild;
   $("dl").disabled = !ST.hasBuild;
   code.value = await (await jget("/file")).text();
+  baseText = code.value;   // 三方合併的共同祖先：你載入檔案那一刻的樣子
   drawGutter(); dirty = false;
   seenSelf = 0; $("ext").classList.remove("show");   // 換檔案就重建基準
   loadTree(); // 切檔之後要重新高亮，而且換專案時整棵樹都不一樣
@@ -682,6 +683,32 @@ function showConflict() {
     b.onclick = fn;
     line.appendChild(b);
   };
+  mk("自動合併", "改到不同地方的兩邊都留下來；改到同一行的會標記出來讓你選", async () => {
+    box.classList.remove("show");
+    say("合併中…");
+    let j;
+    try {
+      j = await (await fetch("/merge", {
+        method: "POST",
+        body: JSON.stringify({ mine: code.value, base: baseText }),
+      })).json();
+    } catch (e) { return say("合併失敗：" + e.message, true); }
+    if (!j.ok) return say(j.error || "合併失敗", true);
+
+    snapshot();               // 合併前先存一份，⌘Z 回得去
+    code.value = j.merged;
+    dirty = true;
+    seenSelf = j.mtime;       // 已經把外部那份納入了，不再算衝突
+    $("ext").classList.remove("show");
+    drawGutter();
+    if (j.conflicts) {
+      const at = code.value.split("\n").findIndex((l) => l.startsWith("<<<<<<<")) + 1;
+      if (at) gotoLine(at);
+      say(j.conflicts + " 處改到同一行，已標記在原始碼裡（<<<<<<< 那幾行），挑完再 ⌘S", true);
+    } else {
+      say("兩邊改的地方沒有重疊，已合併完成。確認後 ⌘S");
+    }
+  });
   mk("用我的覆蓋", "把外部那份改動丟掉，寫入你現在編輯器裡的內容", async () => {
     box.classList.remove("show");
     await save(true);
@@ -1544,6 +1571,7 @@ if (localStorage.getItem("term") === "1") toggleTerm();
 // 蓋掉人家剛改的。用輪詢而不是 fs.watch：後者在 macOS 會漏事件，
 // 而且很多工具是「寫暫存檔再改名」，watch 會收到一堆假事件。
 let seenSelf = 0, seenLatest = 0;
+let baseText = "";   // 載入當下的內容，衝突時拿來當共同祖先
 
 async function checkExternal() {
   if (!ST) return;
