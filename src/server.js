@@ -16,6 +16,7 @@ const path = require("path");
 const { execFile } = require("child_process");
 const latex = require("./latex");
 const synctex = require("./synctex");
+const pptx = require("./pptx");
 
 const PORT = +process.argv[2] || 8790;
 const DEFAULT = process.argv[3] || "";
@@ -44,7 +45,9 @@ function htmlCtx(file) {
 
   return {
     kind: "html", file, root, build,
-    pptx: pptx ? path.join(root, pptx) : null,
+    // 專案自己的 build-pptx.sh 優先（它可能還要嵌影片之類的），
+    // 沒有就用內建的通用建置，輸出同目錄的同名 .pptx
+    pptx: pptx ? path.join(root, pptx) : file.replace(/\.html?$/i, "") + ".pptx",
     previewUrl: "/preview/" + path.relative(root, file).split(path.sep).join("/"),
   };
 }
@@ -172,7 +175,8 @@ const state = () => cur && ({
   kind: cur.kind,
   file: cur.file, name: path.basename(cur.file),
   previewUrl: cur.previewUrl,
-  hasBuild: !!cur.build, hasPptx: !!cur.pptx,
+  hasBuild: cur.kind === "html", hasPptx: !!(cur.pptx && fs.existsSync(cur.pptx)),
+  ownBuild: !!cur.build,   // 專案有自己的 build-pptx.sh
   // 編輯子檔時要讓使用者知道實際編譯的是哪一份
   main: cur.kind === "tex" ? path.basename(cur.main) : null,
   isMain: cur.kind === "tex" ? cur.main === cur.file : null,
@@ -424,11 +428,27 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
   // ── PPTX（只有 HTML 專案有）────────────────────
   // 呼叫專案既有的 build-pptx.sh，維持單一建置路徑
   if (p === "/build" && req.method === "POST") {
-    if (!cur.build) return json(res, 400, { ok: false, out: "這個專案沒有 build-pptx.sh" });
-    return execFile(cur.build, { cwd: cur.root, timeout: 300000 }, (err, stdout, stderr) => {
-      if (!err) cur = makeCtx(cur.file); // 重新抓 pptx 檔名
-      json(res, err ? 500 : 200, { ok: !err, out: (stdout || "") + (stderr || "") });
-    });
+    if (cur.kind !== "html") return json(res, 400, { ok: false, out: "只有 HTML 能出 PPTX" });
+
+    // 專案自己的腳本優先：它可能還要嵌影片、挑輸出檔名，那些內建版不知道
+    if (cur.build) {
+      return execFile(cur.build, { cwd: cur.root, timeout: 300000 }, (err, stdout, stderr) => {
+        if (!err) cur = makeCtx(cur.file); // 重新抓 pptx 檔名
+        json(res, err ? 500 : 200, { ok: !err, out: (stdout || "") + (stderr || "") });
+      });
+    }
+
+    const lines = [];
+    return pptx.build(cur.file, (m) => lines.push(m))
+      .then((r) => {
+        lines.push("完成：" + path.basename(r.pptx) + "（" + r.pages + " 頁）");
+        json(res, 200, { ok: true, out: lines.join("\n"), pages: r.pages });
+      })
+      .catch((e) => {
+        lines.push("失敗：" + (e.message || e));
+        if (e.detail) lines.push(e.detail.slice(-500));
+        json(res, 500, { ok: false, out: lines.join("\n") });
+      });
   }
 
   if (p === "/pptx") {

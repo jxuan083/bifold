@@ -535,7 +535,10 @@ async function load() {
   $("name").textContent = ST.name + (isTex() && !ST.isMain ? " → " + ST.main : "");
   $("path").value = ST.file;
   $("build").disabled = !ST.hasBuild;
-  $("dl").disabled = !ST.hasBuild;
+  $("dl").disabled = !ST.hasPptx;          // 還沒建過就沒東西可下載
+  $("build").title = ST.ownBuild
+    ? "跑這個專案自己的 build-pptx.sh"
+    : "把每一頁截圖鋪成 PPTX，輸出到同目錄";
   code.value = await (await jget("/file")).text();
   baseText = code.value;   // 三方合併的共同祖先：你載入檔案那一刻的樣子
   drawGutter(); dirty = false;
@@ -544,7 +547,7 @@ async function load() {
   const n = code.value.split("\n").length;
   if (isTex()) { say(n + " 行 · 首次編譯可能要等 Tectonic 抓 package…"); compile(); }
   else {
-    say(n + " 行" + (ST.hasBuild ? "" : "（此專案無 build-pptx.sh，不能出 PPTX）"));
+    say(n + " 行");
     reloadPreview();
   }
 }
@@ -1319,13 +1322,16 @@ $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDe
 
 // ── 出 PPTX ─────────────────────────────────────
 $("build").onclick = async () => {
+  // Chrome 是用 file:// 讀硬碟上的檔案，所以一定要先存檔
   if (dirty) await save();
-  say("建置中…（約 20–40 秒）");
+  if (dirty) return say("還沒存檔，先解決衝突再建置", true);
+  say("建置 PPTX 中…（每頁要截圖，約 20–40 秒）");
   $("build").disabled = true;
   try {
     const j = await (await fetch("/build", { method: "POST" })).json();
     const line = (j.out || "").split("\n").filter((s) => s.trim()).pop() || "";
-    say(j.ok ? "PPTX 完成 · " + line.trim() : "建置失敗：" + line, !j.ok);
+    say(j.ok ? line.trim() : "建置失敗：" + line, !j.ok);
+    if (j.ok) { ST = await (await jget("/state")).json(); $("dl").disabled = !ST.hasPptx; }
   } catch (e) { say("建置失敗：" + e.message, true); }
   $("build").disabled = false;
 };
