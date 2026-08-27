@@ -95,6 +95,11 @@ let cur = DEFAULT ? makeCtx(DEFAULT) : null;
 let lastBuild = null;   // 最近一次 LaTeX 編譯結果
 let sxIndex = null;     // 最近一次的 SyncTeX 索引
 
+// 尚未存檔的編輯內容。預覽渲染這份，硬碟上的檔案不動——
+// 這樣打字就能看到變化，又保住「改壞了還沒存、關掉就算了」那條退路。
+// 圖片、字型這些相對路徑資源照樣從真實目錄拿，所以預覽仍然是真的。
+let draft = null;       // { file, content }
+
 // 預覽版才注入：每個開標籤掛上原始行號與序號。
 // 序號讓「同一行有多個標籤」也能精準定位——寫回時前端用同一組規則數到第 N 個。
 // <style> 區塊要跳過，否則 CSS 會被寫壞。
@@ -198,7 +203,7 @@ const server = http.createServer(async (req, res) => {
   if (p === "/open" && req.method === "POST") {
     try {
       cur = makeCtx(normPath(JSON.parse(await readBody(req)).path));
-      lastBuild = null; sxIndex = null;
+      lastBuild = null; sxIndex = null; draft = null;
       return json(res, 200, { ok: true, ...state() });
     } catch (e) {
       return json(res, 400, { ok: false, error: e.message });
@@ -257,7 +262,14 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
   if (p === "/file" && req.method === "POST") {
     const body = await readBody(req);
     fs.writeFileSync(cur.file, body, "utf8");
+    draft = null;   // 已經寫進去了，草稿沒有意義了
     return json(res, 200, { ok: true, bytes: Buffer.byteLength(body) });
+  }
+
+  // 還沒存檔的內容，只放記憶體
+  if (p === "/draft" && req.method === "POST") {
+    draft = { file: cur.file, content: await readBody(req) };
+    return json(res, 200, { ok: true });
   }
 
   // ── LaTeX ──────────────────────────────────────
@@ -355,8 +367,12 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
   if (p.startsWith("/preview/")) {
     const file = path.join(cur.root, p.slice("/preview/".length));
     if (!file.startsWith(cur.root) || !fs.existsSync(file)) return send(res, 404, "text/plain", "not found");
-    if (path.resolve(file) === cur.file)
-      return send(res, 200, MIME[".html"], injectMarkers(fs.readFileSync(file, "utf8")));
+    if (path.resolve(file) === cur.file) {
+      const src = draft && draft.file === cur.file
+        ? draft.content
+        : fs.readFileSync(file, "utf8");
+      return send(res, 200, MIME[".html"], injectMarkers(src));
+    }
     res.writeHead(200, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" });
     return fs.createReadStream(file).pipe(res);
   }

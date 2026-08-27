@@ -440,7 +440,27 @@ code.addEventListener("input", () => {
   dirty = true;
   drawGutter();
   say("未儲存的修改");
+  schedDraft();
 });
+
+// 即時預覽：把還沒存檔的內容送到 server 記憶體，預覽渲染那份。
+// 硬碟上的檔案不動，所以「改壞了還沒存、關掉就算了」這條退路還在。
+// 圖片字型這些相對路徑資源照樣從真實目錄拿，預覽仍然是真的。
+//
+// .tex 不能這樣做：Tectonic 讀的是硬碟，而且 \input 是相對路徑，
+// 寫到別處整份都會失效——要即時就得真的自動存檔，那條退路就沒了。
+let draftTimer = 0, keepScroll = null;
+function schedDraft() {
+  if (!ST || isTex()) return;
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(async () => {
+    try {
+      await fetch("/draft", { method: "POST", body: code.value });
+      keepScroll = $("stage").scrollTop;   // 重繪後回到原處，不然每打一個字就跳回頂端
+      pv.src = ST.previewUrl + "?t=" + Date.now();
+    } catch (e) { /* server 沒了，jget 那邊會講 */ }
+  }, 350);
+}
 
 // ── 載入 / 儲存 ──────────────────────────────────
 let ST = null;
@@ -455,8 +475,9 @@ function applyMode() {
   // 頁碼導覽兩種模式都有意義（投影片 / PDF 頁），縮放與高亮樣式只有 HTML 用得到
   for (const id of ["zoom", "hl"]) $(id).style.display = tex ? "none" : "";
   $("sync").style.display = tex ? "" : "none";
-  // 這顆按鈕作用的對象是右邊那一欄，所以它放在右邊；.tex 時它就是 Recompile
-  $("reload").textContent = tex ? "重新編譯" : "重新預覽";
+  // 這顆按鈕作用的對象是右邊那一欄，所以它放在右邊。
+  // 兩種模式都叫 Recompile，比照 Overleaf——對使用者來說都是「把右邊重做一次」。
+  $("reload").textContent = "Recompile";
   $("reload").classList.toggle("primary", tex);
 
   $("mode").textContent = tex ? "論文" : "簡報";
@@ -834,7 +855,7 @@ async function compile() {
   if (compiling) { queued = true; return; }
   compiling = true;
   $("reload").disabled = true;
-  $("reload").textContent = "編譯中…";
+  $("reload").textContent = "Compiling…";
   const t0 = Date.now();
   try {
     const j = await (await fetch("/compile", { method: "POST" })).json();
@@ -846,7 +867,7 @@ async function compile() {
   }
   compiling = false;
   $("reload").disabled = false;
-  $("reload").textContent = "重新編譯";
+  $("reload").textContent = "Recompile";
   if (queued) { queued = false; compile(); }
 }
 
@@ -919,6 +940,7 @@ pv.addEventListener("load", () => {
     slides = [...d.querySelectorAll("section.slide")];
   } catch (e) { slides = []; }
   fit();
+  if (keepScroll != null) { $("stage").scrollTop = keepScroll; keepScroll = null; }
   updPage();
   pv.contentWindow.postMessage({ type: "hlmode", mode: $("hl").value }, "*");
   if (picking) pv.contentWindow.postMessage({ type: "pick", on: true }, "*");
