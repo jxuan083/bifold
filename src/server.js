@@ -61,6 +61,26 @@ function texCtx(file) {
   };
 }
 
+// 從瀏覽器網址列或 Finder 複製來的是 file:// URL，非 ASCII 會被 percent-encode
+// （中文路徑會變成一長串 %E5%B7%A5…）。只剝掉 file:// 前綴是不夠的。
+//
+// 先確認原字串存不存在再決定要不要解碼——真的有檔名含 % 的話，
+// 無條件解碼反而會把它拆壞。
+function normPath(raw) {
+  raw = String(raw || "").trim();
+  if (/^file:\/\//i.test(raw)) {
+    raw = raw.replace(/^file:\/\//i, "");
+    try { return decodeURIComponent(raw); } catch (e) { return raw; }
+  }
+  if (!fs.existsSync(raw) && /%[0-9a-fA-F]{2}/.test(raw)) {
+    try {
+      const d = decodeURIComponent(raw);
+      if (fs.existsSync(d)) return d;
+    } catch (e) { /* 不是合法的編碼，當一般路徑處理 */ }
+  }
+  return raw;
+}
+
 function makeCtx(file) {
   file = path.resolve(file);
   if (!fs.existsSync(file)) throw new Error("找不到檔案：" + file);
@@ -177,7 +197,7 @@ const server = http.createServer(async (req, res) => {
   // 切換要編輯的檔案
   if (p === "/open" && req.method === "POST") {
     try {
-      cur = makeCtx(JSON.parse(await readBody(req)).path.trim().replace(/^file:\/\//, ""));
+      cur = makeCtx(normPath(JSON.parse(await readBody(req)).path));
       lastBuild = null; sxIndex = null;
       return json(res, 200, { ok: true, ...state() });
     } catch (e) {
@@ -360,6 +380,9 @@ function attachTerminal(server) {
   }
 
   const wss = new WebSocketServer({ server, path: "/term" });
+  // ws 會把 http server 的 error 轉發到自己身上，這裡沒接就變成 unhandled，
+  // 連帶讓 port 被佔用時整個進程崩掉。實際處理交給 server 的 error handler。
+  wss.on("error", () => {});
   wss.on("connection", (sock) => {
     let term;
     try {
@@ -394,8 +417,24 @@ function attachTerminal(server) {
 
 attachTerminal(server);
 
+// port 被佔用就往上找一個能用的。原本會直接崩潰，吐一整頁 stack trace——
+// 這台機器上常有別的東西佔著慣用的 port，為了這個手動改參數很煩。
+let tries = 0;
+server.on("error", (e) => {
+  if (e.code !== "EADDRINUSE" || tries >= 12) {
+    console.error(e.code === "EADDRINUSE"
+      ? `找不到可用的 port（${PORT} 起算試了 ${tries} 個）`
+      : String(e.message || e));
+    process.exit(1);
+  }
+  tries++;
+  server.listen(PORT + tries, "127.0.0.1");
+});
+
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`bifold  http://127.0.0.1:${PORT}`);
+  const port = server.address().port;
+  if (port !== PORT) console.log(`（${PORT} 被佔用，改用 ${port}）`);
+  console.log(`bifold  http://127.0.0.1:${port}`);
   if (cur) {
     console.log(`編輯中  ${cur.file}`);
     if (cur.kind === "tex" && cur.main !== cur.file) console.log(`編譯    ${cur.main}`);

@@ -472,8 +472,21 @@ function applyMode() {
   }
 }
 
+// server 被關掉時 fetch 會 reject。沒有這層的話畫面完全不吭聲，
+// 看起來就像「很慢」或「壞了」——實際上是後面根本沒人在聽。
+async function jget(url, opt) {
+  let r;
+  try {
+    r = await fetch(url, opt);
+  } catch (e) {
+    say("連不上 bifold server，它可能已經關掉了。回終端機重開再重新整理。", true);
+    throw e;
+  }
+  return r;
+}
+
 async function load() {
-  ST = await (await fetch("/state")).json();
+  ST = await (await jget("/state")).json();
   if (!ST.kind) return say("貼上 .html 或 .tex 的絕對路徑開始", true);
   applyMode();
   // 編輯子檔時要明說實際編譯的是哪一份，否則會以為預覽壞了
@@ -481,7 +494,7 @@ async function load() {
   $("path").value = ST.file;
   $("build").disabled = !ST.hasBuild;
   $("dl").disabled = !ST.hasBuild;
-  code.value = await (await fetch("/file")).text();
+  code.value = await (await jget("/file")).text();
   drawGutter(); dirty = false;
   loadTree(); // 切檔之後要重新高亮，而且換專案時整棵樹都不一樣
   const n = code.value.split("\n").length;
@@ -494,7 +507,7 @@ async function load() {
 
 async function openPath() {
   if (dirty && !confirm("有未儲存的修改，確定要切換檔案？")) return;
-  const r = await fetch("/open", { method: "POST", body: JSON.stringify({ path: $("path").value }) });
+  const r = await jget("/open", { method: "POST", body: JSON.stringify({ path: $("path").value }) });
   const j = await r.json();
   if (!j.ok) return say(j.error, true);
   await load();
@@ -584,7 +597,7 @@ $("browse").onclick = async () => {
 };
 $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
 async function save() {
-  const r = await fetch("/file", { method: "POST", body: code.value });
+  const r = await jget("/file", { method: "POST", body: code.value });
   const j = await r.json();
   if (!j.ok) return say("儲存失敗", true);
   dirty = false;

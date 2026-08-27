@@ -21,6 +21,17 @@ node src/server.js 8790 /abs/path/to/deck.html
 node src/server.js 8790 /abs/path/to/paper/main.tex
 ```
 
+port 被佔用會自動往上找一個能用的，並在啟動訊息告訴你實際用了哪個。
+
+每次都打完整路徑很煩的話，`npm link` 之後就能直接 `bifold <檔案>`：
+
+```bash
+cd /path/to/bifold && npm link
+bifold ~/Desktop/deck.html
+```
+
+路徑可以直接貼 Finder 或瀏覽器複製來的 `file://` URL，中文被 percent-encode 成 `%E5%B7%A5%E4%BD%9C` 也吃得下。
+
 啟動後開 http://127.0.0.1:8790。左上角 ☰ 開關檔案樹，點檔案就切過去。要換專案就按「開啟…」叫出 Finder，或直接貼絕對路徑。
 
 選 Finder 而不是瀏覽器的 `<input type="file">`：後者拿不到絕對路徑（安全限制），而這個工具讀寫的是硬碟上的真實檔案。選資料夾時會自動找出裡面的主檔開啟。
