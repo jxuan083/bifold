@@ -264,11 +264,46 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
     draft = null;
     return send(res, 200, "text/plain; charset=utf-8", fs.readFileSync(cur.file, "utf8"));
   }
+  // 存檔。樂觀鎖：前端把「我讀到的是哪個版本」一起送來，跟硬碟現況對不上
+  // 就拒絕——AI 在終端機改完、你又按 ⌘S，不擋的話人家的改動就沒了。
+  // 前端的輪詢有 1.5 秒空窗，這一層才是真正守得住的地方。
   if (p === "/file" && req.method === "POST") {
     const body = await readBody(req);
+    const base = +req.headers["x-base-mtime"] || 0;
+    const force = req.headers["x-force"] === "1";
+    let now = 0;
+    try { now = fs.statSync(cur.file).mtimeMs; } catch (e) {}
+
+    // 差 1ms 以內算同一個版本：不同檔案系統的時間精度不一樣
+    if (base && !force && Math.abs(now - base) > 1) {
+      return json(res, 409, { ok: false, conflict: true, mtime: now });
+    }
+
     fs.writeFileSync(cur.file, body, "utf8");
     draft = null;   // 已經寫進去了，草稿沒有意義了
-    return json(res, 200, { ok: true, bytes: Buffer.byteLength(body) });
+    let after = 0;
+    try { after = fs.statSync(cur.file).mtimeMs; } catch (e) {}
+    return json(res, 200, { ok: true, bytes: Buffer.byteLength(body), mtime: after });
+  }
+
+  // 檔案在外部被改了沒？終端機裡的 claude 改完檔案，編輯器不知道的話，
+  // 你按 ⌘S 就會拿舊內容蓋掉人家剛改的——那是會掉資料的。
+  //
+  // self   = 正在編輯的那個檔，變了要重讀左邊
+  // latest = 整個 LaTeX 專案裡最新的改動時間，變了要重編（改的可能是別的 section）
+  if (p === "/stat") {
+    let self = 0, latest = 0;
+    const mt = (f) => { try { return fs.statSync(f).mtimeMs; } catch (e) { return 0; } };
+    self = mt(cur.file);
+    if (cur.kind === "tex") {
+      for (const rel of walk(cur.root, /\.(tex|bib|sty|cls)$/i)) {
+        const t = mt(path.join(cur.root, rel));
+        if (t > latest) latest = t;
+      }
+    } else {
+      latest = self;
+    }
+    return json(res, 200, { self, latest });
   }
 
   // 還沒存檔的內容，只放記憶體

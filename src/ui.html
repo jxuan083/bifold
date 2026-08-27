@@ -22,14 +22,16 @@
   html,body{margin:0;height:100%;font:13px/1.5 -apple-system,"PingFang TC",sans-serif;
             color:var(--fg);background:var(--panel)}
   body{display:flex;flex-direction:column}
-  #bar{flex:0 0 46px;display:flex;align-items:center;gap:10px;padding:0 14px;
+  #bar{flex:0 0 46px;display:flex;align-items:center;gap:8px;padding:0 12px;
+       flex-wrap:nowrap;overflow:hidden;
        border-bottom:1px solid var(--line);background:var(--bar)}
+  #bar > button{flex:0 0 auto}
   #bar .name{font-weight:700;color:var(--accent);margin:0 4px;white-space:nowrap}
   /* 模式徽章。兩種模式的用途不重疊——HTML 是視覺型簡報，LaTeX 是論文履歷這類
      文件——所以不適用的功能直接不出現就好，但得讓人知道現在在哪個模式。 */
   #mode{font-size:10.5px;letter-spacing:.05em;padding:2px 7px;border-radius:4px;
         border:1px solid var(--line);color:var(--dim);white-space:nowrap;cursor:help}
-  #path{width:300px;padding:5px 9px;border:1px solid var(--line);border-radius:6px;
+  #path{flex:0 1 300px;min-width:110px;padding:5px 9px;border:1px solid var(--line);border-radius:6px;
         background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace}
   button{font:inherit;padding:5px 12px;border:1px solid var(--line);background:var(--btn);
          color:var(--fg);border-radius:6px;cursor:pointer}
@@ -38,7 +40,8 @@
   button.on{background:var(--accent);border-color:var(--accent);color:var(--onaccent)}
   button.primary{background:var(--accent);border-color:var(--accent);color:var(--onaccent)}
   button:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
-  #msg{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #msg{margin-left:auto;flex:1 1 auto;min-width:0;text-align:right;
+       color:var(--dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #msg.err{color:var(--err)}
   #wrap{display:flex;flex:1;min-height:0}
   /* 終端機：真的一個 shell，所以 tectonic、git、claude 原本就在用的東西全都直接能用 */
@@ -85,6 +88,9 @@
   #tree .f.main::after{content:" ●";color:var(--dim);font-size:9px;vertical-align:middle}
   #tree .f.on.main::after{color:var(--onaccent)}
   #menu{padding:5px 10px;font-size:14px;line-height:1.1}
+  /* 外部改動：平常不存在，被別人改了才冒出來 */
+  #ext{display:none;background:var(--err);border-color:var(--err);color:#fff}
+  #ext.show{display:inline-block}
   #left{width:46%;display:flex;flex-direction:column;min-width:0;overflow:hidden;background:var(--panel)}
   #split{width:6px;flex:0 0 6px;cursor:col-resize;background:var(--line);position:relative}
   #split:hover,#split.drag{background:#E2730C}
@@ -180,10 +186,11 @@
   <span class="name" id="name">—</span>
   <button id="save" class="primary">儲存 ⌘S</button>
   <button id="pick" title="⌘E 切換，Esc 退出">選取模式</button>
-  <button id="build">建置 PPTX</button>
-  <button id="dl">下載檔案</button>
-  <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨游標</button>
-  <button id="ref" title="把選取的位置送進終端機 ⌘⇧E">引用位置</button>
+  <button id="build" title="建置 PPTX">PPTX</button>
+  <button id="dl" title="下載建置好的 PPTX">下載</button>
+  <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨</button>
+  <button id="ext" title="檔案在外部被改動，點此載入硬碟上的版本">外部已改動</button>
+  <button id="ref" title="把選取的位置送進終端機 ⌘⇧E">引用</button>
   <button id="termBtn" title="終端機 ⌃`">終端機</button>
   <span id="msg">載入中…</span>
 </div>
@@ -432,7 +439,7 @@ function restore(from, to) {
   drawGutter();
   say("已" + (from === UNDO ? "復原" : "重做"));
   clearTimeout(applyTimer);
-  applyTimer = setTimeout(save, 250); // 連按時只套用最後一次
+  applyTimer = setTimeout(() => save(), 250); // 連按時只套用最後一次
 }
 code.addEventListener("input", () => {
   clearTimeout(snapTimer);
@@ -531,6 +538,7 @@ async function load() {
   $("dl").disabled = !ST.hasBuild;
   code.value = await (await jget("/file")).text();
   drawGutter(); dirty = false;
+  seenSelf = 0; $("ext").classList.remove("show");   // 換檔案就重建基準
   loadTree(); // 切檔之後要重新高亮，而且換專案時整棵樹都不一樣
   const n = code.value.split("\n").length;
   if (isTex()) { say(n + " 行 · 首次編譯可能要等 Tectonic 抓 package…"); compile(); }
@@ -631,15 +639,69 @@ $("browse").onclick = async () => {
   } catch (e) { say("選檔失敗：" + e.message, true); }
 };
 $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
-async function save() {
-  const r = await jget("/file", { method: "POST", body: code.value });
+// 存檔。把「我讀到的是哪個版本」一起送去，server 比對硬碟現況——
+// AI 在終端機改完、你又按 ⌘S，不擋的話人家的改動就沒了。
+async function save(force) {
+  const r = await jget("/file", {
+    method: "POST",
+    headers: { "X-Base-Mtime": String(seenSelf || 0), "X-Force": force ? "1" : "0" },
+    body: code.value,
+  });
   const j = await r.json();
+
+  if (r.status === 409 && j.conflict) {
+    seenSelf = j.mtime;              // 記住硬碟現在的版本
+    $("ext").classList.add("show");
+    showConflict();
+    return;
+  }
   if (!j.ok) return say("儲存失敗", true);
+
   dirty = false;
+  seenSelf = j.mtime || 0;           // 自己存的不算外部改動
+  $("ext").classList.remove("show");
   say("已存回 " + ST.name + "（" + j.bytes.toLocaleString() + " bytes）");
   if (isTex()) compile(); else reloadPreview();
 }
-$("save").onclick = save;
+
+// 衝突時不要偷偷選一邊。三個選項講清楚各自會失去什麼。
+function showConflict() {
+  const box = $("err");
+  box.classList.add("show");
+  $("eMsg").textContent = "存檔衝突：這個檔案在你編輯的期間被外部改過了";
+  $("eGo").style.display = "none";
+  const log = $("eLog");
+  log.style.display = "block";
+  log.innerHTML = "";
+  const line = document.createElement("div");
+  line.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;align-items:center";
+  const mk = (label, title, fn) => {
+    const b = document.createElement("button");
+    b.textContent = label; b.title = title;
+    b.style.cssText = "padding:3px 10px;font-size:11.5px";
+    b.onclick = fn;
+    line.appendChild(b);
+  };
+  mk("用我的覆蓋", "把外部那份改動丟掉，寫入你現在編輯器裡的內容", async () => {
+    box.classList.remove("show");
+    await save(true);
+  });
+  mk("放棄我的，載入硬碟", "丟掉你未存的修改，改用外部那份", async () => {
+    box.classList.remove("show");
+    dirty = false;
+    $("ext").classList.remove("show");
+    await load();
+    say("已載入硬碟上的版本");
+  });
+  mk("先不決定", "兩邊都保留原狀，你自己去比對", () => box.classList.remove("show"));
+  log.appendChild(line);
+  const hint = document.createElement("div");
+  hint.style.cssText = "margin-top:6px;color:var(--dim)";
+  hint.textContent = "想先看差異的話，終端機裡跑 git diff " + ST.name + " 最直接。";
+  log.appendChild(hint);
+}
+
+$("save").onclick = () => save();
 
 // ── 預覽 ────────────────────────────────────────
 let curPage = 0;    // 目前捲到第幾頁，沒變就不重捲
@@ -1476,6 +1538,52 @@ $("termClose").onclick = (e) => { e.stopPropagation(); toggleTerm(); };
 
 addEventListener("resize", () => fitTab(actTab));
 if (localStorage.getItem("term") === "1") toggleTerm();
+
+// ── 外部改動偵測 ────────────────────────────────
+// 終端機裡的 claude 改完檔案，編輯器如果不知道，你按 ⌘S 就會拿舊內容
+// 蓋掉人家剛改的。用輪詢而不是 fs.watch：後者在 macOS 會漏事件，
+// 而且很多工具是「寫暫存檔再改名」，watch 會收到一堆假事件。
+let seenSelf = 0, seenLatest = 0;
+
+async function checkExternal() {
+  if (!ST) return;
+  let st;
+  try { st = await (await fetch("/stat")).json(); } catch (e) { return; }
+  if (!st.self) return;
+
+  if (!seenSelf) { seenSelf = st.self; seenLatest = st.latest; return; }   // 建基準
+
+  // 正在編輯的那個檔被改了
+  if (st.self !== seenSelf) {
+    seenSelf = st.self; seenLatest = st.latest;
+    if (dirty) {
+      // 不能自動覆蓋——手上還有沒存的東西
+      $("ext").classList.add("show");
+      say("檔案在外部被改動了，而你有未存的修改。⌘S 會蓋掉外部的版本。", true);
+    } else {
+      await load();
+      say("檔案在外部被改動，已重新載入");
+    }
+    return;
+  }
+
+  // 專案裡別的檔被改了（改的是另一個 section），左邊不用動，右邊要重編
+  if (st.latest !== seenLatest) {
+    seenLatest = st.latest;
+    if (isTex()) { say("專案內有檔案被改動，重新編譯中…"); compile(); }
+  }
+}
+setInterval(checkExternal, 1500);
+// 背景分頁的 setInterval 會被瀏覽器節流，切回來時立刻補一次
+addEventListener("visibilitychange", () => { if (!document.hidden) checkExternal(); });
+
+$("ext").onclick = async () => {
+  if (dirty && !confirm("放棄未存的修改，載入硬碟上的版本？")) return;
+  dirty = false;
+  $("ext").classList.remove("show");
+  await load();
+  say("已載入硬碟上的版本");
+};
 
 load();
 </script>
