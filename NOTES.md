@@ -74,6 +74,16 @@ Overleaf 是自動存的，這裡刻意不是。原本 HTML 模式的契約就�
 
 漏掉最後一個的症狀很難查：編輯器顯示乾淨的硬碟版，預覽卻還在渲染舊草稿，兩邊分岔，而畫面上完全沒有線索說明為什麼。
 
+## 從 HtmlDrag 抄了什麼、沒抄什麼（2026-08-28）
+
+實際載入它的編輯器看過實作（不是憑印象）：iframe 內注入約 33KB script，但 `mousemove` 是 0、沒有任何 `style.left/top` 操作——**iframe 只負責偵測與回報**（`MutationObserver` + `getBoundingClientRect` + `postMessage` × 6），拖曳邏輯在父視窗。跟 bifold 的 probe.js 是同一個架構。
+
+它注入 `contenteditable` + 執行期唯一 id + `data-fm-injected`（清理標記）。輸出時走 `unifiedHtmlProcessor`：`cloneNode` → `removeAttribute` × 46 清掉注入痕跡 → `XMLSerializer`/`outerHTML` **序列化整份 DOM**。
+
+**抄了 `contenteditable` 雙擊改文字，但沒抄序列化。** 文字改動一樣用 `data-l` 行號寫回，只動那一行。序列化路線能保存任何 DOM 操作，代價是瀏覽器會正規化縮排、屬性順序、註解——對一份要進 git 的原始碼，改個間距就整份 diff。
+
+**沒抄自由拖曳位置**：它產生的是 `left/top` 硬座標，跟「AI 會反覆改內容」的工作流相衝——內容一長版面就爆，得手動重排。bifold 拖的是盒模型邊界，改完仍然自適應。
+
 ## 刻意不做的
 
 **檔案樹的刪除與改名。** 只做新增——寫論文時開新 section 檔有實際用途；刪除和改名用 Finder 更安全，而且這個工具的定位是微調成品，不是檔案管理器。新增有三道防線：不准跳出專案資料夾、副檔名白名單、已存在就拒絕。

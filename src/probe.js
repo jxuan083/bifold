@@ -279,8 +279,68 @@
       text: (el.textContent || "").trim().slice(0, 50) }, "*");
   }
 
-  addEventListener("click", function (e) {
+
+  // ── 雙擊改文字 ────────────────────────────────
+  // 抄自 HtmlDrag 的做法：contenteditable 是瀏覽器原生功能，不必自己做游標。
+  // 但寫回不抄它——它是序列化整份 DOM，我們仍然只改原始碼那一行。
+  //
+  // 只對「沒有元素子節點」的元素開放。裡面還有 <b>、<span> 的話，
+  // 純文字替換會把那些標籤吃掉。
+  var editing = null;
+
+  function canEditText(el) {
+    return el && el.children.length === 0 && (el.textContent || "").trim().length > 0;
+  }
+
+  function startEdit(el) {
+    if (editing) stopEdit(true);
+    editing = { el: el, before: el.textContent };
+    el.setAttribute("contenteditable", "plaintext-only");
+    el.focus();
+    // 全選，直接打字就取代
+    var r = document.createRange();
+    r.selectNodeContents(el);
+    var sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    el.style.outline = "2px solid #E2730C";
+    el.style.outlineOffset = "2px";
+  }
+
+  function stopEdit(commit) {
+    if (!editing) return;
+    var el = editing.el, before = editing.before;
+    var after = el.textContent;
+    el.removeAttribute("contenteditable");
+    el.style.outline = "";
+    el.style.outlineOffset = "";
+    editing = null;
+    if (commit && after !== before) {
+      parent.postMessage({ type: "text", i: +el.dataset.i, line: +el.dataset.l, text: after }, "*");
+    } else if (!commit) {
+      el.textContent = before;
+    }
+  }
+
+  addEventListener("dblclick", function (e) {
     if (!on) return;
+    var el = hit(e.target);
+    if (!canEditText(el)) return;
+    e.preventDefault(); e.stopPropagation();
+    startEdit(el);
+  }, true);
+
+  addEventListener("keydown", function (e) {
+    if (!editing) return;
+    if (e.key === "Escape") { e.preventDefault(); stopEdit(false); }
+    // Enter 送出，Shift+Enter 才換行
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); stopEdit(true); }
+  }, true);
+
+  addEventListener("blur", function () { if (editing) stopEdit(true); }, true);
+
+  addEventListener("click", function (e) {
+    if (!on || editing) return;
     if (moved) { moved = false; e.preventDefault(); e.stopPropagation(); return; } // 拖完不要順便跳行
     var el = hit(e.target);
     if (!el) return;
