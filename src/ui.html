@@ -23,7 +23,7 @@
             color:var(--fg);background:var(--panel)}
   body{display:flex;flex-direction:column}
   #bar{flex:0 0 46px;display:flex;align-items:center;gap:8px;padding:0 12px;
-       flex-wrap:nowrap;overflow:hidden;
+       flex-wrap:nowrap;overflow:hidden;position:relative;
        border-bottom:1px solid var(--line);background:var(--bar)}
   #bar > button{flex:0 0 auto}
   #bar .name{font-weight:700;color:var(--accent);margin:0 4px;white-space:nowrap}
@@ -31,8 +31,12 @@
      文件——所以不適用的功能直接不出現就好，但得讓人知道現在在哪個模式。 */
   #mode{font-size:10.5px;letter-spacing:.05em;padding:2px 7px;border-radius:4px;
         border:1px solid var(--line);color:var(--dim);white-space:nowrap;cursor:help}
-  #path{flex:0 1 300px;min-width:110px;padding:5px 9px;border:1px solid var(--line);border-radius:6px;
+  #path{flex:0 1 300px;min-width:110px;padding:5px 9px;transition:flex-basis .12s;border:1px solid var(--line);border-radius:6px;
         background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace}
+  /* 長路徑塞不進 300px。工具列有十顆按鈕，改 flex-basis 會被 shrink 壓回去，
+     所以聚焦時直接脫離排版浮在上面。 */
+  #path:focus{position:absolute;left:52px;right:14px;width:auto;z-index:20;
+              box-shadow:0 2px 10px var(--shadow)}
   button{font:inherit;padding:5px 12px;border:1px solid var(--line);background:var(--btn);
          color:var(--fg);border-radius:6px;cursor:pointer}
   button:hover{background:var(--btnhov)}
@@ -197,7 +201,8 @@
 <div id="bar">
   <button id="menu" title="檔案樹">☰</button>
   <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
-  <button id="browse" title="選檔案或整個專案資料夾">開啟…</button>
+  <button id="go" title="開啟左邊輸入框裡的路徑（或按 Enter）">前往</button>
+  <button id="browse" title="用 Finder 選檔案或整個專案資料夾">瀏覽…</button>
   <span id="mode"></span>
   <span class="name" id="name">—</span>
   <button id="save" class="primary">儲存 ⌘S</button>
@@ -749,6 +754,13 @@ $("browse").onclick = async () => {
   } catch (e) { say("選檔失敗：" + e.message, true); }
 };
 $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
+$("go").onclick = openPath;
+// 長路徑在 300px 的框裡只看得到開頭。這幾個是為了讓你知道自己貼了什麼：
+$("path").addEventListener("focus", (e) => setTimeout(() => e.target.select(), 0));
+$("path").addEventListener("input", (e) => {
+  e.target.title = e.target.value;          // hover 看得到完整值
+  e.target.scrollLeft = e.target.scrollWidth; // 捲到尾端，檔名比目錄重要
+});
 // 存檔。把「我讀到的是哪個版本」一起送去，server 比對硬碟現況——
 // AI 在終端機改完、你又按 ⌘S，不擋的話人家的改動就沒了。
 async function save(force) {
