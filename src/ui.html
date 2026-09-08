@@ -206,7 +206,6 @@
   <span id="mode"></span>
   <span class="name" id="name">—</span>
   <button id="save" class="primary">儲存 ⌘S</button>
-  <button id="pick" title="⌘E 切換，Esc 退出">選取模式</button>
   <button id="build" title="建置 PPTX">PPTX</button>
   <button id="dl" title="下載建置好的 PPTX">下載</button>
   <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨</button>
@@ -247,6 +246,7 @@
   <div id="right">
     <div id="pvbar">
       <button id="reload">重新預覽</button>
+      <button id="pick" title="⌘E 切換，Esc 退出">選取模式</button>
       <span class="sep"></span>
       <button id="pgPrev">◀</button>
       <span class="pg" id="pgNow">– / –</span>
@@ -593,7 +593,7 @@ function applyMode() {
   // 頁碼導覽兩種模式都有意義（投影片 / PDF 頁），縮放與高亮樣式只有 HTML 用得到
   for (const id of ["zoom", "hl"]) $(id).style.display = tex ? "none" : "";
   $("sync").style.display = tex ? "" : "none";
-  // 這顆按鈕作用的對象是右邊那一欄，所以它放在右邊。
+  // 同一條規則：作用對象在右邊那一欄的控制項就放在右邊。Recompile 與選取模式都是。
   // 兩種模式都叫 Recompile，比照 Overleaf——對使用者來說都是「把右邊重做一次」。
   $("reload").textContent = "Recompile";
   $("reload").classList.toggle("primary", tex);
