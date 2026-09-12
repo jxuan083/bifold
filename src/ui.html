@@ -1721,12 +1721,38 @@ async function sendRef() {
 let NOTES = [];
 let noteSeq = 0;
 
+// 錨點要讓 agent「不必讀檔就知道在講什麼」。純行號在長檔案裡太弱——
+// index.html 現在 20KB，光是整讀一次就要幾千個 token，遠比多送兩行貴。
+// 下面每一項 bifold 本來就有，算出來不用錢：
+//   · 最近一個有 id 的祖先（#slide-7 這種，定位價值最高）
+//   · 元素自己的 tag / class
+//   · 元素的文字內容（probe 本來就在送，只是先前沒用）
+//   · 沒有選到元素時，退回原始碼那一行的文字
+function noteAnchor() {
+  const lineOf = (pos) => code.value.slice(0, pos).split("\n").length;
+  const a = lineOf(code.selectionStart);
+  const b = code.selectionStart === code.selectionEnd ? a : lineOf(code.selectionEnd);
+  const loc = a === b ? "L" + a : "L" + a + "-" + b;
+
+  // 選取模式選到的元素，只在游標正好停在該行時才採用，
+  // 否則你後來自己選了別段，還掛著上一次點的元素就會指錯。
+  if (sel && !isTex() && a === sel.line && b === sel.line) {
+    const owner = (sel.chain || []).filter((c) => c.id).pop();
+    const self = sel.tag + (sel.cls ? "." + sel.cls.split(/\s+/)[0] : "");
+    const where = (sel.id ? "#" + sel.id : owner ? "#" + owner.id + " › " + self : self);
+    return { loc, where, body: sel.text || "" };
+  }
+  const src = (code.value.split("\n")[a - 1] || "").trim();
+  return { loc, where: "", body: src.slice(0, 100) };
+}
+
 function addNote() {
   if (!ST) return;
-  const anchor = refText();                 // 錨點解析沿用既有邏輯
-  const text = prompt("對 " + anchor + " 的意見：", "");
+  const A = noteAnchor();
+  const label = A.loc + (A.where ? " " + A.where : "");
+  const text = prompt("對 " + label + " 的意見：" + (A.body ? "\n" + A.body : ""), "");
   if (!text || !text.trim()) return;
-  NOTES.push({ id: ++noteSeq, anchor, text: text.trim() });
+  NOTES.push({ id: ++noteSeq, file: ST.file, ...A, text: text.trim() });
   renderNotes();
 }
 
@@ -1739,7 +1765,7 @@ function renderNotes() {
     const row = document.createElement("div");
     row.className = "note";
     row.innerHTML = '<code></code><span></span><a title="刪除">✕</a>';
-    row.querySelector("code").textContent = n.anchor;
+    row.querySelector("code").textContent = n.loc + (n.where ? " " + n.where : "");
     const sp = row.querySelector("span");
     sp.textContent = n.text;
     sp.title = "點一下可修改";
@@ -1760,8 +1786,15 @@ async function flushNotes() {
   if (!NOTES.length) return say("沒有標註可送", true);
   if (!(await termReady())) return;
   const n = NOTES.length;
-  const body = "bifold 標註 " + n + " 則：\n" +
-    NOTES.map((x) => x.anchor + " · " + x.text).join("\n");
+  // 同一個檔的絕對路徑只寫一次，不是每則都重複
+  const files = [...new Set(NOTES.map((x) => x.file))];
+  const head = "bifold 標註 " + n + " 則" + (files.length === 1 ? " · " + files[0] : "");
+  const body = head + "\n" + NOTES.map((x, k) => {
+    const p = files.length === 1 ? "" : x.file.split("/").pop() + " ";
+    let out = "[" + (k + 1) + "] " + p + x.loc + (x.where ? " · " + x.where : "");
+    if (x.body) out += "\n    " + x.body;
+    return out + "\n    → " + x.text;
+  }).join("\n");
   actTab.sock.send(body + " ");
   actTab.term.focus();
   NOTES = []; renderNotes();

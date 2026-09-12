@@ -255,6 +255,7 @@
         i: +p.dataset.i, l: +p.dataset.l,
         tag: p.tagName.toLowerCase(),
         cls: (cls1(p).split(/\s+/)[0] || ""),
+        id: p.id || "",
         kids: p.children.length
       });
       if (out.length >= 8) break;
@@ -275,8 +276,9 @@
       inline: el.getAttribute("style") || "",
       css: pick,
       chain: chainOf(el),
+      id: el.id || "",
       kids: el.children.length,
-      text: (el.textContent || "").trim().slice(0, 50) }, "*");
+      text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80) }, "*");
   }
 
 
