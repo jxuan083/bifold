@@ -46,14 +46,12 @@
         border:1px solid var(--line);color:var(--dim);white-space:nowrap;cursor:help}
   /* 路徑輸入、前往、瀏覽 平常都收起來。只有真的要換檔案時才出現，
      而且直接橫跨整條工具列——長路徑本來就塞不進固定寬度的欄位。 */
-  #path,#go,#browse{display:none}
-  #bar.editing #path{display:block;position:absolute;left:52px;right:150px;z-index:20;
+  #path,#browse{display:none}
+  #bar.editing #path{display:block;position:absolute;left:52px;right:96px;z-index:20;
         padding:5px 9px;border:1px solid var(--accent);border-radius:6px;
         background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace;
         box-shadow:0 2px 10px var(--shadow)}
-  #bar.editing #go,#bar.editing #browse{display:block;position:absolute;z-index:21}
-  #bar.editing #go{right:78px}
-  #bar.editing #browse{right:12px}
+  #bar.editing #browse{display:block;position:absolute;right:12px;z-index:21}
   #bar.editing .name,#bar.editing #mode,#bar.editing #msg,
   #bar.editing .grp+.grp,#bar.editing #save{visibility:hidden}
   button{font:inherit;padding:5px 12px;border:1px solid var(--line);background:var(--btn);
@@ -247,7 +245,6 @@
     <button class="name" id="name" title="點一下輸入其他路徑">—</button>
     <span id="dot" title="有未儲存的修改">•</span>
     <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
-    <button id="go" title="開啟輸入框裡的路徑（或按 Enter）">前往</button>
     <button id="browse" title="用 Finder 選檔案或整個專案資料夾">瀏覽…</button>
   </div>
 
@@ -826,7 +823,6 @@ $("path").addEventListener("keydown", (e) => {
 // dirty 在好幾處被指派，與其每一處都補一行，不如在本地輪詢同步。
 // 純記憶體比較，沒有網路也沒有 token 成本。
 setInterval(() => $("bar").classList.toggle("unsaved", !!dirty), 300);
-$("go").onclick = () => { editPath(false); openPath(); };
 // 長路徑在 300px 的框裡只看得到開頭。這幾個是為了讓你知道自己貼了什麼：
 $("path").addEventListener("focus", (e) => setTimeout(() => e.target.select(), 0));
 $("path").addEventListener("input", (e) => {
