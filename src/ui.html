@@ -193,6 +193,21 @@
   #err.show{display:block}
   #err .hd{color:var(--err);font:700 12px ui-monospace,Menlo,monospace;margin-bottom:4px}
   #err .hd a{color:var(--accent);font-weight:400;margin-left:8px;cursor:pointer;text-decoration:underline}
+  /* 標註佇列：送出前可以反覆增刪改，完全在本地，不花 agent 的 token */
+  #notes{display:none;border-top:1px solid var(--line);background:var(--bar);padding:8px 10px;
+         max-height:150px;overflow:auto}
+  #notes.show{display:block}
+  #notes .hd{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim);margin-bottom:7px}
+  #notes .hd b{color:var(--accent);font-weight:700}
+  #notes .hd a{color:var(--accent);cursor:pointer;text-decoration:none}
+  #notes .hd a:hover{text-decoration:underline}
+  #notes .note{display:flex;align-items:baseline;gap:8px;padding:3px 0;
+               border-bottom:1px solid var(--line);font-size:11.5px}
+  #notes .note:last-child{border-bottom:0}
+  #notes .note code{flex:0 0 auto;color:var(--dim);font:11px ui-monospace,Menlo,monospace}
+  #notes .note span{flex:1 1 auto;cursor:text}
+  #notes .note a{flex:0 0 auto;color:var(--dim);cursor:pointer;text-decoration:none}
+  #notes .note a:hover{color:var(--accent)}
   #err pre{margin:6px 0 0;font:11px/1.45 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-wrap}
 </style>
 </head>
@@ -236,6 +251,11 @@
       <div class="hd"><b id="pTag">—</b><span id="pLine"></span>
         <span style="margin-left:auto">拖標籤名可調數值</span></div>
       <div id="pRows"></div>
+    </div>
+    <div id="notes">
+      <div class="hd"><b>標註</b><span id="noteCount">0</span>
+        <span style="margin-left:auto"><a id="noteSend">一次送進終端機</a></span></div>
+      <div id="noteList"></div>
     </div>
     <div id="err">
       <div class="hd"><span id="eMsg"></span><a id="eGo">跳到該行</a><a id="eFull">完整 log</a></div>
@@ -1499,6 +1519,10 @@ addEventListener("keydown", (e) => {
   if (mod && e.shiftKey && (e.key === "E" || e.key === "e")) {
     e.preventDefault(); sendRef(); return;
   }
+  // ⌘⇧A 把當前選取＋一句意見丟進佇列，累積夠了再一次送
+  if (mod && e.shiftKey && (e.key === "A" || e.key === "a")) {
+    e.preventDefault(); addNote(); return;
+  }
   if (mod && e.key === "e") {
     e.preventDefault();
     if (isTex()) syncToCursor(true); else $("pick").click();
@@ -1670,22 +1694,81 @@ function refText() {
   return loc;
 }
 
-async function sendRef() {
-  if (!ST) return;
+async function termReady() {
+  if (!ST) return false;
   if (!$("termWrap").classList.contains("show")) await toggleTerm();
   if (!actTab) await newTab();
   // 等連線起來再送，否則字會掉
   for (let i = 0; i < 40 && (!actTab.sock || actTab.sock.readyState !== 1); i++)
     await new Promise((r) => setTimeout(r, 100));
-  if (!actTab.sock || actTab.sock.readyState !== 1) return say("終端機還沒連上", true);
+  if (!actTab.sock || actTab.sock.readyState !== 1) { say("終端機還沒連上", true); return false; }
+  return true;
+}
 
+async function sendRef() {
+  if (!(await termReady())) return;
   const t = refText();
   // 不送換行：送出去只是把文字打進去，要不要執行由你決定
   actTab.sock.send(t + " ");
   actTab.term.focus();
   say("已送進終端機：" + t);
 }
+
+// ── 標註佇列 ─────────────────────────────────────────
+// 對著預覽上的元素留意見，累積起來一次送。分開送的代價不是字數，是回合數：
+// agent 每個回合都要重播整段對話，五則分五次送就重播五次。
+// 送出前的增刪改完全在本地，agent 全程不知情，成本是零。
+let NOTES = [];
+let noteSeq = 0;
+
+function addNote() {
+  if (!ST) return;
+  const anchor = refText();                 // 錨點解析沿用既有邏輯
+  const text = prompt("對 " + anchor + " 的意見：", "");
+  if (!text || !text.trim()) return;
+  NOTES.push({ id: ++noteSeq, anchor, text: text.trim() });
+  renderNotes();
+}
+
+function renderNotes() {
+  const box = $("notes"), list = $("noteList");
+  box.classList.toggle("show", NOTES.length > 0);
+  $("noteCount").textContent = NOTES.length;
+  list.innerHTML = "";
+  for (const n of NOTES) {
+    const row = document.createElement("div");
+    row.className = "note";
+    row.innerHTML = '<code></code><span></span><a title="刪除">✕</a>';
+    row.querySelector("code").textContent = n.anchor;
+    const sp = row.querySelector("span");
+    sp.textContent = n.text;
+    sp.title = "點一下可修改";
+    sp.onclick = () => {
+      const t = prompt("修改意見：", n.text);
+      if (t !== null && t.trim()) { n.text = t.trim(); renderNotes(); }
+    };
+    row.querySelector("a").onclick = () => {
+      NOTES = NOTES.filter((x) => x.id !== n.id); renderNotes();
+    };
+    list.appendChild(row);
+  }
+}
+
+// 一次送出全部。格式只給錨點不給內容——agent 有 Read，
+// 給它檔名行號它自己會去讀，而且讀到的是硬碟上的當下版本。
+async function flushNotes() {
+  if (!NOTES.length) return say("沒有標註可送", true);
+  if (!(await termReady())) return;
+  const n = NOTES.length;
+  const body = "bifold 標註 " + n + " 則：\n" +
+    NOTES.map((x) => x.anchor + " · " + x.text).join("\n");
+  actTab.sock.send(body + " ");
+  actTab.term.focus();
+  NOTES = []; renderNotes();
+  say("已送出 " + n + " 則標註");
+}
 $("ref").onclick = sendRef;
+$("noteSend").onclick = flushNotes;
 
 $("termBtn").onclick = toggleTerm;
 $("termNew").onclick = (e) => { e.stopPropagation(); newTab(); };
