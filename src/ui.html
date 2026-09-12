@@ -22,21 +22,40 @@
   html,body{margin:0;height:100%;font:13px/1.5 -apple-system,"PingFang TC",sans-serif;
             color:var(--fg);background:var(--panel)}
   body{display:flex;flex-direction:column}
-  #bar{flex:0 0 46px;display:flex;align-items:center;gap:8px;padding:0 12px;
+  #bar{flex:0 0 46px;display:flex;align-items:center;gap:10px;padding:0 12px;
        flex-wrap:nowrap;overflow:hidden;position:relative;
        border-bottom:1px solid var(--line);background:var(--bar)}
   #bar > button{flex:0 0 auto}
-  #bar .name{font-weight:700;color:var(--accent);margin:0 4px;white-space:nowrap}
+  /* 功能分組。同一組的東西貼在一起，組與組之間用一條細線隔開——
+     原本十一個控制項等權重排成一列，找不到主動作。 */
+  #bar .grp{flex:0 0 auto;display:flex;align-items:center;gap:6px}
+  #bar .grp + .grp{padding-left:10px;border-left:1px solid var(--line)}
+  #bar #msg{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 檔名是按鈕不是標籤——它可以點，點了才展開路徑輸入 */
+  #bar .name{font-weight:700;color:var(--accent);white-space:nowrap;
+             border:0;background:none;padding:4px 2px;cursor:pointer}
+  #bar .name:hover{text-decoration:underline}
+  #dot{color:var(--accent);font-size:16px;line-height:1;visibility:hidden}
+  #bar.unsaved #dot{visibility:visible}
+  /* 儲存是主動作，放最右邊、給重量。未存時整顆亮起來。 */
+  #save{flex:0 0 auto}
+  #bar:not(.unsaved) #save{background:var(--btn);border-color:var(--line);color:var(--fg)}
   /* 模式徽章。兩種模式的用途不重疊——HTML 是視覺型簡報，LaTeX 是論文履歷這類
      文件——所以不適用的功能直接不出現就好，但得讓人知道現在在哪個模式。 */
   #mode{font-size:10.5px;letter-spacing:.05em;padding:2px 7px;border-radius:4px;
         border:1px solid var(--line);color:var(--dim);white-space:nowrap;cursor:help}
-  #path{flex:0 1 300px;min-width:110px;padding:5px 9px;transition:flex-basis .12s;border:1px solid var(--line);border-radius:6px;
-        background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace}
-  /* 長路徑塞不進 300px。工具列有十顆按鈕，改 flex-basis 會被 shrink 壓回去，
-     所以聚焦時直接脫離排版浮在上面。 */
-  #path:focus{position:absolute;left:52px;right:14px;width:auto;z-index:20;
-              box-shadow:0 2px 10px var(--shadow)}
+  /* 路徑輸入、前往、瀏覽 平常都收起來。只有真的要換檔案時才出現，
+     而且直接橫跨整條工具列——長路徑本來就塞不進固定寬度的欄位。 */
+  #path,#go,#browse{display:none}
+  #bar.editing #path{display:block;position:absolute;left:52px;right:150px;z-index:20;
+        padding:5px 9px;border:1px solid var(--accent);border-radius:6px;
+        background:var(--btn);color:var(--fg);font:11.5px ui-monospace,Menlo,monospace;
+        box-shadow:0 2px 10px var(--shadow)}
+  #bar.editing #go,#bar.editing #browse{display:block;position:absolute;z-index:21}
+  #bar.editing #go{right:78px}
+  #bar.editing #browse{right:12px}
+  #bar.editing .name,#bar.editing #mode,#bar.editing #msg,
+  #bar.editing .grp+.grp,#bar.editing #save{visibility:hidden}
   button{font:inherit;padding:5px 12px;border:1px solid var(--line);background:var(--btn);
          color:var(--fg);border-radius:6px;cursor:pointer}
   button:hover{background:var(--btnhov)}
@@ -100,9 +119,14 @@
   #split:hover,#split.drag{background:#E2730C}
   #split::after{content:"";position:absolute;inset:0 -4px}
   #pvbar{height:38px;display:flex;align-items:center;gap:8px;padding:0 12px;
-         border-bottom:1px solid var(--line);background:var(--bar);font-size:12px;color:var(--dim)}
+         border-bottom:1px solid var(--line);background:var(--bar);font-size:12px;color:var(--dim);
+         overflow-x:auto;scrollbar-width:none}
+  #pvbar::-webkit-scrollbar{display:none}
+  /* 不許壓縮。預覽欄拉窄時原本會把「選取模式」擠成兩三個字寬的豎排，
+     寧可讓整條可以橫向捲動。跟 #bar > button 是同一條規則。 */
+  #pvbar button,#pvbar select,#pvbar .pg{flex:0 0 auto;white-space:nowrap}
   #pvbar button{padding:3px 9px}
-  #pvbar .sep{width:1px;height:15px;background:var(--line);margin:0 3px}
+  #pvbar .sep{flex:0 0 auto;width:1px;height:15px;background:var(--line);margin:0 3px}
   #pvbar .pg{font-variant-numeric:tabular-nums;min-width:56px;text-align:center;color:var(--accent);font-weight:700}
   select{font:inherit;padding:3px 6px;border:1px solid var(--line);border-radius:5px;
          background:var(--btn);color:var(--fg)}
@@ -215,19 +239,31 @@
 
 <div id="bar">
   <button id="menu" title="檔案樹">☰</button>
-  <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
-  <button id="go" title="開啟左邊輸入框裡的路徑（或按 Enter）">前往</button>
-  <button id="browse" title="用 Finder 選檔案或整個專案資料夾">瀏覽…</button>
-  <span id="mode"></span>
-  <span class="name" id="name">—</span>
-  <button id="save" class="primary">儲存 ⌘S</button>
-  <button id="build" title="建置 PPTX">PPTX</button>
-  <button id="dl" title="下載建置好的 PPTX">下載</button>
-  <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨</button>
+
+  <!-- 檔案：平常只顯示徽章與檔名，點檔名才展開路徑輸入。
+       開一個檔本來不需要三個常駐控制項。 -->
+  <div class="grp file">
+    <span id="mode"></span>
+    <button class="name" id="name" title="點一下輸入其他路徑">—</button>
+    <span id="dot" title="有未儲存的修改">•</span>
+    <input id="path" placeholder="貼上 .html 或 .tex 的絕對路徑，Enter 開啟" spellcheck="false">
+    <button id="go" title="開啟輸入框裡的路徑（或按 Enter）">前往</button>
+    <button id="browse" title="用 Finder 選檔案或整個專案資料夾">瀏覽…</button>
+  </div>
+
   <button id="ext" title="檔案在外部被改動，點此載入硬碟上的版本">外部已改動</button>
-  <button id="ref" title="把選取的位置送進終端機 ⌘⇧E">引用</button>
-  <button id="termBtn" title="終端機 ⌃`">終端機</button>
   <span id="msg">載入中…</span>
+
+  <div class="grp" title="給終端機裡的 agent">
+    <button id="ref" title="把選取的位置送進終端機 ⌘⇧E">引用</button>
+    <button id="termBtn" title="終端機 ⌃`">終端機</button>
+  </div>
+  <div class="grp">
+    <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨</button>
+    <button id="build" title="建置 PPTX">PPTX</button>
+    <button id="dl" title="下載建置好的 PPTX">下載</button>
+  </div>
+  <button id="save" class="primary">儲存 ⌘S</button>
 </div>
 
 <div id="wrap">
@@ -272,15 +308,15 @@
       <span class="pg" id="pgNow">– / –</span>
       <button id="pgNext">▶</button>
       <select id="zoom">
-        <option value="fit">符合寬度</option>
+        <option value="fit">符合寬</option>
         <option value="1">100%</option>
         <option value="0.75">75%</option>
         <option value="0.5">50%</option>
       </select>
       <button id="solo">只看預覽</button>
       <select id="hl" title="高亮樣式">
-        <option value="devtools">高亮：比照 DevTools</option>
-        <option value="soft">高亮：調淡版</option>
+        <option value="devtools">高亮 DevTools</option>
+        <option value="soft">高亮 調淡</option>
       </select>
     </div>
     <div id="stage">
@@ -773,8 +809,24 @@ $("browse").onclick = async () => {
     await openPath();
   } catch (e) { say("選檔失敗：" + e.message, true); }
 };
-$("path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPath(); } });
-$("go").onclick = openPath;
+// 點檔名才展開路徑輸入，Esc 或失焦收回。開檔是低頻動作，
+// 不值得三個控制項常駐在工具列上。
+function editPath(on) {
+  $("bar").classList.toggle("editing", on);
+  if (on) { $("path").focus(); $("path").select(); }
+}
+$("name").onclick = () => editPath(true);
+$("path").addEventListener("blur", () => setTimeout(() => {
+  if (!$("bar").contains(document.activeElement)) editPath(false);
+}, 120));
+$("path").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); editPath(false); return; }
+  if (e.key === "Enter") { e.preventDefault(); editPath(false); openPath(); }
+});
+// dirty 在好幾處被指派，與其每一處都補一行，不如在本地輪詢同步。
+// 純記憶體比較，沒有網路也沒有 token 成本。
+setInterval(() => $("bar").classList.toggle("unsaved", !!dirty), 300);
+$("go").onclick = () => { editPath(false); openPath(); };
 // 長路徑在 300px 的框裡只看得到開頭。這幾個是為了讓你知道自己貼了什麼：
 $("path").addEventListener("focus", (e) => setTimeout(() => e.target.select(), 0));
 $("path").addEventListener("input", (e) => {
