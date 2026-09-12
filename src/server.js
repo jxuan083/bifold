@@ -258,6 +258,9 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
       });
   }
 
+  // /stat 要在沒開檔時也回得了 JSON——前端每 1.5 秒靠它偵測「外部換了檔」，
+  // 服務剛啟動時本來就沒有檔案，擋在這裡的話分頁永遠等不到那個訊號。
+  if (p === "/stat" && !cur) return json(res, 200, { self: 0, latest: 0, file: "" });
   if (!cur) return send(res, 404, "text/plain", "尚未開啟任何檔案");
 
   // 原始碼讀寫
@@ -307,7 +310,9 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
     } else {
       latest = self;
     }
-    return json(res, 200, { self, latest });
+    // 一併回報「現在是哪一個檔」。只比 mtime 的話，檔案被外部換掉時
+    // 前端看到的只是一個變動的數字，無從得知身分換了。
+    return json(res, 200, { self, latest, file: cur.file });
   }
 
   // 三方合併。二選一不是答案——AI 改了 A 段、你改了 B 段，兩邊都該留。

@@ -1843,9 +1843,22 @@ let seenSelf = 0, seenLatest = 0;
 let baseText = "";   // 載入當下的內容，衝突時拿來當共同祖先
 
 async function checkExternal() {
-  if (!ST) return;
   let st;
   try { st = await (await fetch("/stat")).json(); } catch (e) { return; }
+
+  // 檔案被外部換掉（例如 agent 打 POST /open）。這要先判，而且不能被
+  // 「這個分頁還沒有檔案」擋住——服務重啟後分頁就是這個狀態，
+  // 擋掉的話它永遠醒不過來。
+  if (st.file && (!ST || !ST.file || st.file !== ST.file)) {
+    if (dirty) {
+      $("ext").classList.add("show");
+      return say("外部要求切換檔案，但你有未存的修改。存檔或捨棄後才會切。", true);
+    }
+    await load();
+    return say("已由外部切換到 " + st.file.split("/").pop());
+  }
+
+  if (!ST) return;
   if (!st.self) return;
 
   if (!seenSelf) { seenSelf = st.self; seenLatest = st.latest; return; }   // 建基準
