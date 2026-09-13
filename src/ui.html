@@ -258,7 +258,8 @@
   <div class="grp">
     <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨</button>
     <button id="build" title="建置 PPTX">PPTX</button>
-    <button id="dl" title="下載建置好的 PPTX">下載</button>
+    <button id="dl" title="下載到瀏覽器的下載資料夾">下載</button>
+    <button id="reveal" title="PPTX 本來就存在專案資料夾，這裡直接開 Finder 指給你看">Finder</button>
   </div>
   <button id="save" class="primary">儲存 ⌘S</button>
 </div>
@@ -1595,6 +1596,12 @@ $("build").onclick = async () => {
   $("build").disabled = false;
 };
 $("dl").onclick = () => (location.href = "/pptx");
+// 建置好的 PPTX 本來就落在專案資料夾，多數時候使用者要的是「在哪」而不是再下載一份
+$("reveal").onclick = async () => {
+  const r = await fetch("/reveal", { method: "POST" });
+  const j = await r.json().catch(() => ({}));
+  if (!j.ok) say(j.error || "還沒建置", true);
+};
 
 // ── 快捷鍵 ──────────────────────────────────────
 addEventListener("keydown", (e) => {

@@ -455,6 +455,14 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
       });
   }
 
+  // 在 Finder 裡選取建置好的檔案。比再下載一份有用，因為它一直都在專案資料夾。
+  if (p === "/reveal" && req.method === "POST") {
+    if (!cur || !cur.pptx || !fs.existsSync(cur.pptx))
+      return json(res, 400, { ok: false, error: "還沒建置 PPTX" });
+    return execFile("open", ["-R", cur.pptx], (err) =>
+      json(res, err ? 500 : 200, { ok: !err, error: err && err.message }));
+  }
+
   if (p === "/pptx") {
     if (!cur.pptx || !fs.existsSync(cur.pptx)) return send(res, 404, "text/plain", "尚未建置");
     res.writeHead(200, {
