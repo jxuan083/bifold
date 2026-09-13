@@ -22,8 +22,24 @@ const run = (cmd, args, opts) => new Promise((ok, bad) => {
   });
 });
 
+// launchd 起的服務拿到的是最小 PATH，裡面沒有 /opt/homebrew/bin，
+// 所以直接寫 "pdftoppm" 會 ENOENT。自己找一次，找不到就給裝得起來的訊息。
+function findBin(name) {
+  const dirs = (process.env.PATH || "").split(":").filter(Boolean)
+    .concat(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]);
+  for (const d of dirs) {
+    const f = path.join(d, name);
+    try { fs.accessSync(f, fs.constants.X_OK); return f; } catch {}
+  }
+  return null;
+}
+
+let PDFTOPPM = null;
+
 function check() {
   if (!fs.existsSync(CHROME)) throw new Error("找不到 Google Chrome，PDF 這步需要它");
+  PDFTOPPM = findBin("pdftoppm");
+  if (!PDFTOPPM) throw new Error("找不到 pdftoppm，請先安裝 poppler（brew install poppler）");
 }
 
 // 從 CSS 裡找出一頁多大。找 .slide / .page / section 這類規則裡成對的 width/height。
@@ -79,7 +95,7 @@ async function build(htmlFile, log = () => {}) {
     if (!fs.existsSync(pdf)) throw new Error("Chrome 沒有產生 PDF");
 
     log("[2/3] 每頁輸出 " + DPI + " DPI 截圖");
-    await run("pdftoppm", ["-jpeg", "-r", String(DPI), "-jpegopt", "quality=92",
+    await run(PDFTOPPM, ["-jpeg", "-r", String(DPI), "-jpegopt", "quality=92",
                            pdf, path.join(work, "s")]);
     const shots = fs.readdirSync(work).filter((f) => /^s.*\.jpg$/i.test(f)).sort();
     if (!shots.length) throw new Error("pdftoppm 沒有輸出任何頁面");
