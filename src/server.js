@@ -302,13 +302,12 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
     let self = 0, latest = 0;
     const mt = (f) => { try { return fs.statSync(f).mtimeMs; } catch (e) { return 0; } };
     self = mt(cur.file);
-    if (cur.kind === "tex") {
-      for (const rel of walk(cur.root, /\.(tex|bib|sty|cls)$/i)) {
-        const t = mt(path.join(cur.root, rel));
-        if (t > latest) latest = t;
-      }
-    } else {
-      latest = self;
+    // HTML 也要看同專案的 css/js——樣式在外部被改時，只盯著 .html 的
+    // mtime 什麼都偵測不到，預覽會停在舊樣式而且毫無提示。
+    const exts = cur.kind === "tex" ? /\.(tex|bib|sty|cls)$/i : /\.(html|css|js|mjs)$/i;
+    for (const rel of walk(cur.root, exts)) {
+      const t = mt(path.join(cur.root, rel));
+      if (t > latest) latest = t;
     }
     // 一併回報「現在是哪一個檔」。只比 mtime 的話，檔案被外部換掉時
     // 前端看到的只是一個變動的數字，無從得知身分換了。

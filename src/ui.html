@@ -1951,7 +1951,10 @@ async function checkExternal() {
   // 專案裡別的檔被改了（改的是另一個 section），左邊不用動，右邊要重編
   if (st.latest !== seenLatest) {
     seenLatest = st.latest;
+    // .tex 改的可能是別的 section，要重編；HTML 改的通常是 css/js，
+    // 左邊那份原始碼不用動，但右邊一定要重新渲染。
     if (isTex()) { say("專案內有檔案被改動，重新編譯中…"); compile(); }
+    else { say("專案內有檔案被改動，預覽已更新"); reloadPreview(); }
   }
 }
 setInterval(checkExternal, 1500);
