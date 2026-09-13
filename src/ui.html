@@ -311,10 +311,6 @@
         <option value="0.5">50%</option>
       </select>
       <button id="solo">只看預覽</button>
-      <select id="hl" title="高亮樣式">
-        <option value="devtools">高亮 DevTools</option>
-        <option value="soft">高亮 調淡</option>
-      </select>
     </div>
     <div id="stage">
       <div id="frameBox"><iframe id="pv"></iframe></div>
@@ -660,7 +656,7 @@ function applyMode() {
   document.documentElement.dataset.kind = ST.kind;
   for (const id of ["pick", "build", "dl"]) $(id).style.display = tex ? "none" : "";
   // 頁碼導覽兩種模式都有意義（投影片 / PDF 頁），縮放與高亮樣式只有 HTML 用得到
-  for (const id of ["zoom", "hl"]) $(id).style.display = tex ? "none" : "";
+  $("zoom").style.display = tex ? "none" : "";
   $("sync").style.display = tex ? "" : "none";
   // 同一條規則：作用對象在右邊那一欄的控制項就放在右邊。Recompile 與選取模式都是。
   // 兩種模式都叫 Recompile，比照 Overleaf——對使用者來說都是「把右邊重做一次」。
@@ -1236,7 +1232,6 @@ pv.addEventListener("load", () => {
   fit();
   if (keepScroll != null) { $("stage").scrollTop = keepScroll; keepScroll = null; }
   updPage();
-  pv.contentWindow.postMessage({ type: "hlmode", mode: $("hl").value }, "*");
   if (picking) pv.contentWindow.postMessage({ type: "pick", on: true }, "*");
 });
 
@@ -1329,11 +1324,6 @@ $("solo").onclick = () => {
 })();
 
 // ── 選取模式：點預覽 → 跳到原始碼那一行 ─────────────
-$("hl").onchange = () => {
-  localStorage.setItem("hl", $("hl").value);
-  pv.contentWindow.postMessage({ type: "hlmode", mode: $("hl").value }, "*");
-};
-$("hl").value = localStorage.getItem("hl") || "devtools";
 
 $("pick").onclick = () => {
   picking = !picking;

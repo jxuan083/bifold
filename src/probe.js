@@ -1,18 +1,15 @@
 // 注入到預覽頁的探針：盒模型高亮、點選定位、拖邊界改間距。
 // 由 server.js 讀進來包成 <script> 塞進預覽版 HTML，原始檔完全不受影響。
 (function () {
-  // 兩套配色可切換：
-  //   devtools = Chrome 長年的預設值，濃、無位移動畫、content 有外框線
-  //   soft     = 調淡版，蓋在文字上時讀得到底下的內容
+  // 沿用 DevTools 的盒模型配色，但調淡——這個工具看的是文字密集的頁面，
+  // 高亮蓋住底下的字就失去意義。原本另有一套 DevTools 原始濃度可切換，
+  // 但兩者只差 0.2 的 alpha，不值得在工具列上佔一個永久欄位。
   var PALETTE = {
-    devtools: { mg: "rgba(246,178,107,.66)", bd: "rgba(255,229,153,.66)",
-                pd: "rgba(147,196,125,.55)", ct: "rgba(111,168,220,.66)",
-                outline: "rgba(255,255,255,.7)", ease: "0s" },
-    soft:     { mg: "rgba(246,178,107,.42)", bd: "rgba(255,229,153,.48)",
-                pd: "rgba(147,196,125,.38)", ct: "rgba(111,168,220,.20)",
-                outline: "transparent", ease: "140ms cubic-bezier(.2,.8,.2,1)" }
+    soft: { mg: "rgba(246,178,107,.42)", bd: "rgba(255,229,153,.48)",
+            pd: "rgba(147,196,125,.38)", ct: "rgba(111,168,220,.20)",
+            outline: "transparent", ease: "140ms cubic-bezier(.2,.8,.2,1)" }
   };
-  var mode = "devtools";
+  var mode = "soft";
   var LAYERS = [["mg"], ["bd"], ["pd"], ["ct"]];
   var EASE = PALETTE[mode].ease;
   // 邊界抓取範圍。預覽被父視窗縮放過，這裡要除以縮放比，
@@ -172,7 +169,6 @@
   addEventListener("message", function (e) {
     var d = e.data || {};
     if (d.type === "scale") scale = d.s || 1;
-    if (d.type === "hlmode") { mode = d.mode; paint(); if (last) draw(last); }
     if (d.type === "pick") {
       on = d.on; last = null; geo = null;
       document.body.style.cursor = "";
