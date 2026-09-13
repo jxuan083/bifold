@@ -324,6 +324,8 @@
     <div id="termTabs"></div>
     <button id="termNew" title="開一個新的 shell">＋</button>
     <span class="cwd" id="termCwd"></span>
+    <button id="termFontDn" title="縮小字級（⌘−）">A−</button>
+    <button id="termFontUp" title="放大字級（⌘＋）">A＋</button>
     <button id="termClose" title="收起終端機">✕</button>
   </div>
   <div id="termPanes"></div>
@@ -1647,6 +1649,15 @@ window.__syncTermTheme = () => {
   for (const t of tabs) t.term.options.theme = termTheme();
 };
 
+// 字級記在 localStorage：終端機字太小很傷眼，而且每個人的螢幕不一樣，
+// 不該寫死在程式裡。改完要重新 fit，不然欄寬還是舊的。
+let termFont = Math.min(24, Math.max(9, +localStorage.getItem("bifold.termFont") || 14));
+function setTermFont(px) {
+  termFont = Math.min(24, Math.max(9, px));
+  localStorage.setItem("bifold.termFont", String(termFont));
+  for (const t of tabs) { t.term.options.fontSize = termFont; fitTab(t); }
+}
+
 async function loadXterm() {
   if (xterm) return;
   await loadScript("/vendor/xterm.js");
@@ -1663,7 +1674,7 @@ async function newTab() {
   $("termPanes").appendChild(t.pane);
 
   t.term = new xterm.Terminal({
-    fontSize: 12,
+    fontSize: termFont,
     fontFamily: 'ui-monospace, Menlo, monospace',
     cursorBlink: true,
     theme: termTheme(),
@@ -1923,6 +1934,8 @@ $("termClose").onclick = (e) => { e.stopPropagation(); toggleTerm(); };
 })();
 
 addEventListener("resize", () => fitTab(actTab));
+$("termFontUp").onclick = () => setTermFont(termFont + 1);
+$("termFontDn").onclick = () => setTermFont(termFont - 1);
 if (localStorage.getItem("term") === "1") toggleTerm();
 
 // ── 外部改動偵測 ────────────────────────────────
