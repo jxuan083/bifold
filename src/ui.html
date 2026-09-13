@@ -853,8 +853,14 @@ async function save(force) {
 
   if (r.status === 409 && j.conflict) {
     seenSelf = j.mtime;              // 記住硬碟現在的版本
-    $("ext").classList.add("show");
-    showConflict();
+    // 先試合併再說。整檔 mtime 只能告訴你「這個檔被動過」，不能告訴你
+    // 「動到你正在改的那幾行」——你改第 4 頁、外部改第 3 頁，那是可以
+    // 自動併起來的，不該拿一個衝突警告去打斷人。
+    // 真的撞到同一行才叫出選擇介面。
+    const m = await tryMerge();
+    if (m === "clean") return save(force);      // 合乾淨了，直接存回
+    if (m === "conflict") { $("ext").classList.add("show"); showConflict(); return; }
+    $("ext").classList.add("show"); showConflict();   // 合併本身失敗，交給人
     return;
   }
   if (!j.ok) return say("儲存失敗", true);
@@ -867,6 +873,36 @@ async function save(force) {
 }
 
 // 衝突時不要偷偷選一邊。三個選項講清楚各自會失去什麼。
+// 自動三方合併。回傳 clean / conflict / error。
+// 合乾淨時把結果寫回編輯器並更新基準，呼叫端可以直接接著存。
+async function tryMerge() {
+  let j;
+  try {
+    j = await (await fetch("/merge", {
+      method: "POST",
+      body: JSON.stringify({ mine: code.value, base: baseText }),
+    })).json();
+  } catch (e) { return "error"; }
+  if (!j.ok) return "error";
+
+  snapshot();                       // 合併前先存一份，⌘Z 回得去
+  const before = code.value.split("\n").length;
+  code.value = j.merged;
+  baseText = j.merged;
+  seenSelf = baseMtime = j.mtime;
+  drawGutter();
+  if (j.conflicts) {
+    dirty = true;
+    const at = code.value.split("\n").findIndex((l) => l.startsWith("<<<<<<<")) + 1;
+    if (at) gotoLine(at);
+    say(j.conflicts + " 處改到同一行，已標記在原始碼裡（<<<<<<< 那幾行），挑完再 ⌘S", true);
+    return "conflict";
+  }
+  const d = code.value.split("\n").length - before;
+  say("外部改動已自動併入" + (d ? "（" + (d > 0 ? "+" : "") + d + " 行）" : "") + "，兩邊沒有重疊");
+  return "clean";
+}
+
 function showConflict() {
   const box = $("err");
   box.classList.add("show");
