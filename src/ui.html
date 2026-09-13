@@ -612,7 +612,23 @@ code.addEventListener("input", () => {
   drawGutter();
   say("未儲存的修改");
   schedDraft();
+  schedAutosave();
 });
+
+// ── 自動儲存 ─────────────────────────────────────────
+// 停手 1.5 秒就存。安全性來自上面那個修好的衝突守衛：baseMtime 只在
+// 載入與存檔成功時更新，所以檔案被外部改過的話這裡會拿到 409，
+// 跳出三方合併而不是無聲覆蓋。
+// 已經有衝突待處理時不自動存——那種狀態下該由人決定要保留哪一份。
+let autoTimer = null;
+function schedAutosave() {
+  clearTimeout(autoTimer);
+  if ($("ext").classList.contains("show")) return;   // 衝突未解，交給人
+  autoTimer = setTimeout(() => {
+    if (!dirty || $("ext").classList.contains("show")) return;
+    save();
+  }, 1500);
+}
 
 // 即時預覽：把還沒存檔的內容送到 server 記憶體，預覽渲染那份。
 // 硬碟上的檔案不動，所以「改壞了還沒存、關掉就算了」這條退路還在。
@@ -834,7 +850,7 @@ $("path").addEventListener("input", (e) => {
 async function save(force) {
   const r = await jget("/file", {
     method: "POST",
-    headers: { "X-Base-Mtime": String(seenSelf || 0), "X-Force": force ? "1" : "0" },
+    headers: { "X-Base-Mtime": String(baseMtime || 0), "X-Force": force ? "1" : "0" },
     body: code.value,
   });
   const j = await r.json();
@@ -848,7 +864,7 @@ async function save(force) {
   if (!j.ok) return say("儲存失敗", true);
 
   dirty = false;
-  seenSelf = j.mtime || 0;           // 自己存的不算外部改動
+  seenSelf = baseMtime = j.mtime || 0;   // 自己存的不算外部改動
   $("ext").classList.remove("show");
   say("已存回 " + ST.name + "（" + j.bytes.toLocaleString() + " bytes）");
   if (isTex()) compile(); else reloadPreview();
@@ -887,7 +903,7 @@ function showConflict() {
     snapshot();               // 合併前先存一份，⌘Z 回得去
     code.value = j.merged;
     dirty = true;
-    seenSelf = j.mtime;       // 已經把外部那份納入了，不再算衝突
+    seenSelf = baseMtime = j.mtime;   // 已經把外部那份納入了，不再算衝突
     $("ext").classList.remove("show");
     drawGutter();
     if (j.conflicts) {
@@ -1888,6 +1904,11 @@ if (localStorage.getItem("term") === "1") toggleTerm();
 // 蓋掉人家剛改的。用輪詢而不是 fs.watch：後者在 macOS 會漏事件，
 // 而且很多工具是「寫暫存檔再改名」，watch 會收到一堆假事件。
 let seenSelf = 0, seenLatest = 0;
+// seenSelf 是「上次看到硬碟長什麼樣」，偵測到外部改動就會更新。
+// baseMtime 是「編輯器裡這份內容對應的硬碟版本」，只有載入與存檔成功才更新。
+// 兩者混用會讓儲存的衝突守衛失效：checkExternal 一更新基準，接下來的
+// ⌘S 送出的 X-Base-Mtime 就跟硬碟一致，409 永遠不觸發，直接蓋掉外部的改動。
+let baseMtime = 0;
 let baseText = "";   // 載入當下的內容，衝突時拿來當共同祖先
 
 async function checkExternal() {
@@ -1909,17 +1930,19 @@ async function checkExternal() {
   if (!ST) return;
   if (!st.self) return;
 
-  if (!seenSelf) { seenSelf = st.self; seenLatest = st.latest; return; }   // 建基準
+  if (!seenSelf) { seenSelf = baseMtime = st.self; seenLatest = st.latest; return; }   // 建基準
 
   // 正在編輯的那個檔被改了
   if (st.self !== seenSelf) {
     seenSelf = st.self; seenLatest = st.latest;
+    // 注意：dirty 時不能動 baseMtime，否則下一次存檔會無聲蓋掉外部的改動
     if (dirty) {
       // 不能自動覆蓋——手上還有沒存的東西
       $("ext").classList.add("show");
       say("檔案在外部被改動了，而你有未存的修改。⌘S 會蓋掉外部的版本。", true);
     } else {
       await load();
+      baseMtime = st.self;   // 編輯器內容已等於硬碟
       say("檔案在外部被改動，已重新載入");
     }
     return;
