@@ -258,7 +258,7 @@
   <div class="grp">
     <button id="sync" title="開啟後，游標移到哪一行 PDF 就跳到那一頁。平常關著，用 ⌘E 跳一次就好">跟隨</button>
     <button id="build" title="建置 PPTX">PPTX</button>
-    <button id="dl" title="下載到瀏覽器的下載資料夾">下載</button>
+    <button id="export" title="選位置存一份（原生存檔對話框）">匯出…</button>
     <button id="reveal" title="PPTX 本來就存在專案資料夾，這裡直接開 Finder 指給你看">Finder</button>
   </div>
   <button id="save" class="primary">儲存 ⌘S</button>
@@ -1595,7 +1595,12 @@ $("build").onclick = async () => {
   } catch (e) { say("建置失敗：" + e.message, true); }
   $("build").disabled = false;
 };
-$("dl").onclick = () => (location.href = "/pptx");
+$("export").onclick = async () => {
+  const r = await fetch("/export", { method: "POST" });
+  const j = await r.json().catch(() => ({}));
+  if (j.cancelled) return;
+  say(j.ok ? "已匯出 " + j.path.replace(/.*\//, "") : (j.error || "匯出失敗"), !j.ok);
+};
 // 建置好的 PPTX 本來就落在專案資料夾，多數時候使用者要的是「在哪」而不是再下載一份
 $("reveal").onclick = async () => {
   const r = await fetch("/reveal", { method: "POST" });

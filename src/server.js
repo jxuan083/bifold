@@ -455,6 +455,35 @@ panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
       });
   }
 
+  // 匯出：原生存檔對話框選位置，再把建好的 PPTX 複製過去。
+  // 建置本身還是寫在專案資料夾（單一真實位置），這裡只是給一份副本。
+  if (p === "/export" && req.method === "POST") {
+    if (!cur || !cur.pptx || !fs.existsSync(cur.pptx))
+      return json(res, 400, { ok: false, error: "還沒建置 PPTX" });
+    const suggested = path.basename(cur.pptx);
+    const script = `
+ObjC.import("AppKit");
+const panel = $.NSSavePanel.savePanel;
+panel.title = "匯出 PPTX";
+panel.nameFieldStringValue = ${JSON.stringify(suggested)};
+panel.prompt = "匯出";
+$.NSApplication.sharedApplication.activateIgnoringOtherApps(true);
+panel.runModal === 1 ? ObjC.unwrap(panel.URL.path) : ""
+`;
+    return execFile("osascript", ["-l", "JavaScript", "-e", script],
+      { timeout: 600000 }, (err, stdout) => {
+        if (err) return json(res, 500, { ok: false, error: err.message });
+        const dest = (stdout || "").trim();
+        if (!dest) return json(res, 200, { ok: false, cancelled: true });
+        try {
+          fs.copyFileSync(cur.pptx, dest);
+          return json(res, 200, { ok: true, path: dest });
+        } catch (e) {
+          return json(res, 500, { ok: false, error: e.message });
+        }
+      });
+  }
+
   // 在 Finder 裡選取建置好的檔案。比再下載一份有用，因為它一直都在專案資料夾。
   if (p === "/reveal" && req.method === "POST") {
     if (!cur || !cur.pptx || !fs.existsSync(cur.pptx))
